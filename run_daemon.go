@@ -95,26 +95,28 @@ func setLogger() {
 func init() {
 	setLogger()
 
-	rootCmd.Flags().StringVar(&signingMnemonicString, "signing-mnemonic", "",
+	runDaemonCmd.Flags().StringVar(&signingMnemonicString, "signing-mnemonic", "",
 		"25-word mnemonic of the oracle for signing (required)")
-	markFlagRequired(rootCmd.Flags(), "signing-mnemonic")
+	markFlagRequired(runDaemonCmd.Flags(), "signing-mnemonic")
 
-	rootCmd.Flags().StringVar(&vrfMnemonicString, "vrf-mnemonic", "",
+	runDaemonCmd.Flags().StringVar(&vrfMnemonicString, "vrf-mnemonic", "",
 		"25-word mnemonic of the oracle for computing vrf (required)")
-	markFlagRequired(rootCmd.Flags(), "vrf-mnemonic")
+	markFlagRequired(runDaemonCmd.Flags(), "vrf-mnemonic")
 
-	rootCmd.Flags().StringVar(&ownerAddressString, "owner", "", "the oracle's owner address (required)")
-	markFlagRequired(rootCmd.Flags(), "owner")
+	runDaemonCmd.Flags().StringVar(&ownerAddressString, "owner", "", "the oracle's owner address (required)")
+	markFlagRequired(runDaemonCmd.Flags(), "owner")
 
-	rootCmd.Flags().Uint64Var(&startingRound, "round", 0,
+	runDaemonCmd.Flags().Uint64Var(&startingRound, "round", 0,
 		"the round to start scanning from (optional. default: current round)")
 
-	rootCmd.Flags().Uint64Var(&oFee, "oracle-fee", 1000,
+	runDaemonCmd.Flags().Uint64Var(&oFee, "oracle-fee", 1000,
 		"the fee payed to the oracle for its service in MicroAlgos (optional)")
 
 }
 
 func computeWaitFactor(roundFromIndexer uint64, roundToFetch uint64) float64 {
+	// keep pace with the indexer
+	// if the service is far behind the indexer, wait time will decrease
 	if roundFromIndexer <= roundToFetch {
 		return 1
 	}
@@ -210,13 +212,17 @@ func computeAndSignVrf(blockNumber [8]byte, blockSeed []byte, x [32]byte, oracle
 	return sig, vrfOutput[:], nil
 }
 
-func getOracleLogic(vrfRequest VrfRequest) (types.LogicSig, error) {
+func getOracleLogic(vrfRequest VrfRequest, algodClient *algod.Client) (types.LogicSig, error) {
 	oracleTealParams, err := vrfRequest.OracleTealParams()
 	if err != nil {
 		return types.LogicSig{}, fmt.Errorf("bad TEAL template params: %v", err)
 	}
+	logic, err := CompileOracle(oracleTealParams, algodClient)
+	if err != nil {
+		return types.LogicSig{}, fmt.Errorf("error compiling TEAL: %v", err)
+	}
 	return types.LogicSig{
-		Logic: CompileOracle(oracleTealParams),
+		Logic: logic,
 	}, nil
 }
 
@@ -224,7 +230,7 @@ func handleRequestsForCurrentRound(requestsToHandle []VrfRequest, block models.B
 	vrfPrivateKey ed25519.PrivateKey, ownerAddress types.Address, oeSuffix []byte,
 	suggestedParams types.SuggestedParams, algodClient *algod.Client) {
 	for _, currentRequestHandled := range requestsToHandle {
-		oracleLogicSig, err := getOracleLogic(currentRequestHandled)
+		oracleLogicSig, err := getOracleLogic(currentRequestHandled, algodClient)
 		if err != nil {
 			log.Warnf("failed computing LogicSig for %v: %v. skipping...", currentRequestHandled, err)
 			continue
@@ -530,9 +536,9 @@ func testEnvironmentVariables() error {
 	return nil
 }
 
-var rootCmd = &cobra.Command{
-	Use:   "vrf-oracle",
-	Short: "service that reads VRF requests from the blockchain, and broadcasts back the response",
+var runDaemonCmd = &cobra.Command{
+	Use:   "run-daemon",
+	Short: "runs the daemon",
 	Run: func(cmd *cobra.Command, args []string) {
 		err := testEnvironmentVariables()
 		if err != nil {
@@ -580,11 +586,4 @@ var rootCmd = &cobra.Command{
 		)
 		//cmd.HelpFunc()(cmd, args)
 	},
-}
-
-func main() {
-	err := rootCmd.Execute()
-	if err != nil {
-		panic(err)
-	}
 }

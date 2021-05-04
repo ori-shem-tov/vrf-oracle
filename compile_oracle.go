@@ -3,8 +3,8 @@ package main
 import (
 	"encoding/base32"
 	"fmt"
+	"github.com/algorand/go-algorand-sdk/client/v2/algod"
 	"github.com/algorand/go-algorand-sdk/types"
-	"github.com/algorandfoundation/go-aftools/tealtools"
 	"strconv"
 	"strings"
 )
@@ -57,6 +57,6 @@ func (oracleTealParams *OracleTealParams) Validate() error {
 }
 
 // CompileOracle compiles ths oracle teal program
-func CompileOracle(oracleTealParams OracleTealParams) []byte {
-	return tealtools.CompileTeal(&oracleTealParams, OracleTealTemplate)
+func CompileOracle(oracleTealParams OracleTealParams, algodClient *algod.Client) ([]byte, error) {
+	return CompileTeal(&oracleTealParams, OracleTealTemplate, algodClient)
 }
