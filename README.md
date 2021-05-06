@@ -4,6 +4,8 @@
 - add command to run end-to-end test
 - migrate `pyteal` scripts from https://github.com/ori-shem-tov/rand-on-algo to this repo
 - compile TEAL scripts from binary templates instead of text templates
+- add cancellation phase
+- organize the code in packages
 
 ## Build
 ### Build libsodium from fork
