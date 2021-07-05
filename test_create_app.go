@@ -11,6 +11,7 @@ import (
 	"github.com/algorand/go-algorand-sdk/future"
 	"github.com/algorand/go-algorand-sdk/mnemonic"
 	"github.com/algorand/go-algorand-sdk/types"
+	"github.com/ori-shem-tov/vrf-oracle/tools"
 	log "github.com/sirupsen/logrus"
 	"github.com/spf13/cobra"
 )
@@ -109,7 +110,7 @@ func cutOracle(algodClient *algod.Client) (string, string, string, error) {
 	if err != nil {
 		return "", "", "", err
 	}
-	prefix, suffix, suffixHash := CutTeal(program, 9, 163)
+	prefix, suffix, suffixHash := tools.CutTeal(program, 9, 163)
 	return prefix, suffix, suffixHash, nil
 }
 
@@ -123,7 +124,7 @@ func cutEscrow(algodClient *algod.Client) (string, string, string, error) {
 	if err != nil {
 		return "", "", "", err
 	}
-	prefix, suffix, suffixHash := CutTeal(program, 28, 107)
+	prefix, suffix, suffixHash := tools.CutTeal(program, 28, 107)
 	return prefix, suffix, suffixHash, nil
 }
 

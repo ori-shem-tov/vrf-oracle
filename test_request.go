@@ -14,6 +14,7 @@ import (
 	"github.com/algorand/go-algorand-sdk/mnemonic"
 	"github.com/algorand/go-algorand-sdk/transaction"
 	"github.com/algorand/go-algorand-sdk/types"
+	"github.com/ori-shem-tov/vrf-oracle/tools"
 	log "github.com/sirupsen/logrus"
 	"github.com/spf13/cobra"
 	"strings"
@@ -145,7 +146,7 @@ var queryPhaseCmd = &cobra.Command{
 			log.Error(err)
 			return
 		}
-		_, escrowSuffixB64, _ := CutTeal(escrowProgram, 28, 107)
+		_, escrowSuffixB64, _ := tools.CutTeal(escrowProgram, 28, 107)
 		escrowSuffix, err := base64.StdEncoding.DecodeString(escrowSuffixB64)
 		if err != nil {
 			log.Error(err)
