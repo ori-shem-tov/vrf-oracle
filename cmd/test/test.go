@@ -1,16 +1,16 @@
-package main
+package test
 
 import (
 	"github.com/spf13/cobra"
 )
 
 func init() {
-	testCmd.AddCommand(queryPhaseCmd)
-	testCmd.AddCommand(createAppCmd)
-	testCmd.AddCommand(settlementPhaseCmd)
+	TestCmd.AddCommand(queryPhaseCmd)
+	TestCmd.AddCommand(createAppCmd)
+	TestCmd.AddCommand(settlementPhaseCmd)
 }
 
-var testCmd = &cobra.Command{
+var TestCmd = &cobra.Command{
 	Use:   "test",
 	Short: "test tool for the vrf daemon",
 	Run: func(cmd *cobra.Command, args []string) {

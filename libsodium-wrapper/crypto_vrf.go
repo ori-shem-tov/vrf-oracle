@@ -14,19 +14,19 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with go-algorand.  If not, see <https://www.gnu.org/licenses/>.
 
-package main
+package libsodium_wrapper
 
 // #cgo CFLAGS: -Wall -std=c99
-// #cgo darwin,amd64 CFLAGS: -I${SRCDIR}/libs/darwin/amd64/include
-// #cgo darwin,amd64 LDFLAGS: ${SRCDIR}/libs/darwin/amd64/lib/libsodium.a
-// #cgo linux,amd64 CFLAGS: -I${SRCDIR}/libs/linux/amd64/include
-// #cgo linux,amd64 LDFLAGS: ${SRCDIR}/libs/linux/amd64/lib/libsodium.a
-// #cgo linux,arm64 CFLAGS: -I${SRCDIR}/libs/linux/arm64/include
-// #cgo linux,arm64 LDFLAGS: ${SRCDIR}/libs/linux/arm64/lib/libsodium.a
-// #cgo linux,arm CFLAGS: -I${SRCDIR}/libs/linux/arm/include
-// #cgo linux,arm LDFLAGS: ${SRCDIR}/libs/linux/arm/lib/libsodium.a
-// #cgo windows,amd64 CFLAGS: -I${SRCDIR}/libs/windows/amd64/include
-// #cgo windows,amd64 LDFLAGS: ${SRCDIR}/libs/windows/amd64/lib/libsodium.a
+// #cgo darwin,amd64 CFLAGS: -I${SRCDIR}/../libs/darwin/amd64/include
+// #cgo darwin,amd64 LDFLAGS: ${SRCDIR}/../libs/darwin/amd64/lib/libsodium.a
+// #cgo linux,amd64 CFLAGS: -I${SRCDIR}/../libs/linux/amd64/include
+// #cgo linux,amd64 LDFLAGS: ${SRCDIR}/../libs/linux/amd64/lib/libsodium.a
+// #cgo linux,arm64 CFLAGS: -I${SRCDIR}/../libs/linux/arm64/include
+// #cgo linux,arm64 LDFLAGS: ${SRCDIR}/../libs/linux/arm64/lib/libsodium.a
+// #cgo linux,arm CFLAGS: -I${SRCDIR}/../libs/linux/arm/include
+// #cgo linux,arm LDFLAGS: ${SRCDIR}/../libs/linux/arm/lib/libsodium.a
+// #cgo windows,amd64 CFLAGS: -I${SRCDIR}/../libs/windows/amd64/include
+// #cgo windows,amd64 LDFLAGS: ${SRCDIR}/../libs/windows/amd64/lib/libsodium.a
 // #include <stdint.h>
 // #include "sodium.h"
 import "C"
@@ -95,7 +95,7 @@ func (sk VrfPrivkey) Pubkey() (pk VrfPubkey) {
 	return pk
 }
 
-func (sk VrfPrivkey) proveBytes(msg []byte) (proof VrfProof, ok bool) {
+func (sk VrfPrivkey) ProveBytes(msg []byte) (proof VrfProof, ok bool) {
 	// &msg[0] will make Go panic if msg is zero length
 	m := (*C.uchar)(C.NULL)
 	if len(msg) != 0 {

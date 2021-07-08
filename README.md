@@ -5,7 +5,6 @@
 - migrate `pyteal` scripts from https://github.com/ori-shem-tov/rand-on-algo to this repo
 - compile TEAL scripts from binary templates instead of text templates
 - add cancellation phase
-- organize the code in packages
 
 ## Build
 ### Build libsodium from fork
@@ -34,7 +33,7 @@ This service can take the following arguments:
 
 ### Execute
 ```sh
-go run . run-daemon <ARGUMENTS>
+go run ./cmd run-daemon <ARGUMENTS>
 ```
 
 ## Test
@@ -56,22 +55,22 @@ Later on, the game specific `ESCROW` and `ORACLE_ESCROW` accounts should be fund
 
 ### Create the game stateful app
 ```sh
-go run . test create-app --app-creator-mnemonic <APP_CREATOR_MNEMONIC> \
+go run ./cmd test create-app --app-creator-mnemonic <APP_CREATOR_MNEMONIC> \
 --oracle-owner <ORACLE_OWNER> --oracle-pk <ORACLE_PK>
 ```
 
-The created app ID is printed to the console, and will referred to as `APP_ID` in the next steps.
+The created app ID is printed to the console, and will be referred to as `APP_ID` in the next steps.
 
 ### Run the query phase
 ```sh
-go run . test query --address-a-mnemonic <PLAYER_A_MNEMONIC> \
+go run ./cmd test query --address-a-mnemonic <PLAYER_A_MNEMONIC> \
 --address-b-mnemonic <PLAYER_B_MNEMONIC> \
 --app-id <APP_ID> --oracle-owner <ORACLE_OWNER> \
 --oracle-pk <ORACLE_PK> --block <BLOCK_NUMBER>
 ```
 `BLOCK_NUMBER` is the block number from which the oracle should take the block seed from for the VRF input. It must be a future block.
 
-The random game counter is printed to the console, and will referred to as `COUNTER` in the next steps.
+The random game counter is printed to the console, and will be referred to as `COUNTER` in the next steps.
 
 A request to fund the `ESCROW` and `ORACLE_ESCROW` accounts, is shown. This is required in order to meet the minimum balance constraint.
 After funding both accounts, press `ENTER` and the query phase transactions groups should be broadcast.
@@ -79,6 +78,6 @@ After funding both accounts, press `ENTER` and the query phase transactions grou
 ### Run the settlement phase
 After the `BLOCK_NUMBER` is added to the blockchain, the oracle can compute the VRF and publish its answer, and the settlement phase can be executed:
 ```sh
-go run . test settlement --address-a <PLAYER_A> \
+go run ./cmd test settlement --address-a <PLAYER_A> \
 --address-b <PLAYER_B> --counter-hex-string <COUNTER> --app-id <APP_ID>
 ```

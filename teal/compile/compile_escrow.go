@@ -1,9 +1,10 @@
-package main
+package compile
 
 import (
 	"fmt"
 	"github.com/algorand/go-algorand-sdk/client/v2/algod"
 	"github.com/algorand/go-algorand-sdk/types"
+	"github.com/ori-shem-tov/vrf-oracle/teal/templates"
 	"strconv"
 	"strings"
 )
@@ -29,5 +30,5 @@ func (escrowTealParams *EscrowTealParams) Validate() error {
 
 // CompileEscrow compiles ths escrow teal program
 func CompileEscrow(escrowTealParams EscrowTealParams, algodClient *algod.Client) ([]byte, error) {
-	return CompileTeal(&escrowTealParams, EscrowTealTemplate, algodClient)
+	return CompileTeal(&escrowTealParams, templates.EscrowTealTemplate, algodClient)
 }

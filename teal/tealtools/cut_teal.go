@@ -1,4 +1,4 @@
-package tools
+package tealtools
 
 import (
 	"crypto/sha512"

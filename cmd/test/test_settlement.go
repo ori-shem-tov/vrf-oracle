@@ -1,4 +1,4 @@
-package main
+package test
 
 import (
 	"context"
@@ -7,6 +7,8 @@ import (
 	"github.com/algorand/go-algorand-sdk/future"
 	"github.com/algorand/go-algorand-sdk/transaction"
 	"github.com/algorand/go-algorand-sdk/types"
+	"github.com/ori-shem-tov/vrf-oracle/cmd/daemon"
+	"github.com/ori-shem-tov/vrf-oracle/teal/compile"
 	log "github.com/sirupsen/logrus"
 	"github.com/spf13/cobra"
 )
@@ -18,21 +20,21 @@ var (
 )
 
 func init() {
-	setLogger()
+	daemon.SetLogger()
 
 	settlementPhaseCmd.Flags().Uint64Var(&appID, "app-id", 0,
 		"Game app ID")
-	markFlagRequired(settlementPhaseCmd.Flags(), "app-id")
+	daemon.MarkFlagRequired(settlementPhaseCmd.Flags(), "app-id")
 
 	settlementPhaseCmd.Flags().StringVar(&addressAStr, "address-a", "", "address of player A")
-	markFlagRequired(settlementPhaseCmd.Flags(), "address-a")
+	daemon.MarkFlagRequired(settlementPhaseCmd.Flags(), "address-a")
 
 	settlementPhaseCmd.Flags().StringVar(&addressBStr, "address-b", "", "address of player B")
-	markFlagRequired(settlementPhaseCmd.Flags(), "address-b")
+	daemon.MarkFlagRequired(settlementPhaseCmd.Flags(), "address-b")
 
 	settlementPhaseCmd.Flags().StringVar(&counterHexStr, "counter-hex-string", "",
 		"a string representation of an 8 byte hex")
-	markFlagRequired(settlementPhaseCmd.Flags(), "counter-hex-string")
+	daemon.MarkFlagRequired(settlementPhaseCmd.Flags(), "counter-hex-string")
 }
 
 func makeSettlementTransactionsGroup(appID uint64, to, player string, escrowLsig types.LogicSig,
@@ -88,12 +90,12 @@ var settlementPhaseCmd = &cobra.Command{
 	Use:   "settlement",
 	Short: "test settlement phase",
 	Run: func(cmd *cobra.Command, args []string) {
-		err := testEnvironmentVariables()
+		err := daemon.TestEnvironmentVariables()
 		if err != nil {
 			log.Error(err)
 			return
 		}
-		algodClient, _, err := initClients(algodAddress, algodToken, indexerAddress, indexerToken)
+		algodClient, _, err := daemon.InitClients(daemon.AlgodAddress, daemon.AlgodToken, daemon.IndexerAddress, daemon.IndexerToken)
 		if err != nil {
 			log.Error(err)
 			return
@@ -117,12 +119,12 @@ var settlementPhaseCmd = &cobra.Command{
 			log.Errorf("counter-hex-string is not a valid 8 byte hex")
 			return
 		}
-		escrowTealParams := EscrowTealParams{
+		escrowTealParams := compile.EscrowTealParams{
 			AddressA:   addressA,
 			AddressB:   addressB,
 			CounterHex: counterHexStr,
 		}
-		escrowProgram, err := CompileEscrow(escrowTealParams, algodClient)
+		escrowProgram, err := compile.CompileEscrow(escrowTealParams, algodClient)
 		if err != nil {
 			log.Error(err)
 			return

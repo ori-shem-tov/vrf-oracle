@@ -1,4 +1,4 @@
-package main
+package compile
 
 import (
 	"encoding/base32"
@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"github.com/algorand/go-algorand-sdk/client/v2/algod"
 	"github.com/algorand/go-algorand-sdk/types"
+	"github.com/ori-shem-tov/vrf-oracle/teal/templates"
 	"strings"
 )
 
@@ -47,5 +48,5 @@ func (statefulGameTealParams *StatefulGameTealParams) Validate() error {
 }
 
 func CompileStatefulGame(params StatefulGameTealParams, algodClient *algod.Client) ([]byte, error) {
-	return CompileTeal(&params, StatefulGameTealTemplate, algodClient)
+	return CompileTeal(&params, templates.StatefulGameTealTemplate, algodClient)
 }

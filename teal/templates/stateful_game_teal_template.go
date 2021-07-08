@@ -1,4 +1,4 @@
-package main
+package templates
 
 import "text/template"
 
@@ -71,7 +71,7 @@ int 1
 byte "counter"
 app_local_get
 concat
-sha256
+sha512_256
 concat
 byte 0x20
 concat

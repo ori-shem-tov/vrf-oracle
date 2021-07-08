@@ -1,10 +1,10 @@
-package main
+package test
 
 import (
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
-	"crypto/sha256"
+	"crypto/sha512"
 	"encoding/base32"
 	"encoding/base64"
 	"encoding/hex"
@@ -14,7 +14,9 @@ import (
 	"github.com/algorand/go-algorand-sdk/mnemonic"
 	"github.com/algorand/go-algorand-sdk/transaction"
 	"github.com/algorand/go-algorand-sdk/types"
-	"github.com/ori-shem-tov/vrf-oracle/tools"
+	"github.com/ori-shem-tov/vrf-oracle/cmd/daemon"
+	"github.com/ori-shem-tov/vrf-oracle/teal/compile"
+	"github.com/ori-shem-tov/vrf-oracle/teal/tealtools"
 	log "github.com/sirupsen/logrus"
 	"github.com/spf13/cobra"
 	"strings"
@@ -30,31 +32,31 @@ var (
 )
 
 func init() {
-	setLogger()
+	daemon.SetLogger()
 
 	queryPhaseCmd.Flags().Uint64Var(&appID, "app-id", 0,
 		"Game app ID")
-	markFlagRequired(queryPhaseCmd.Flags(), "app-id")
+	daemon.MarkFlagRequired(queryPhaseCmd.Flags(), "app-id")
 
 	queryPhaseCmd.Flags().StringVar(&addressAMnemonic, "address-a-mnemonic", "",
 		"25-word mnemonic of player A")
-	markFlagRequired(queryPhaseCmd.Flags(), "address-a-mnemonic")
+	daemon.MarkFlagRequired(queryPhaseCmd.Flags(), "address-a-mnemonic")
 
 	queryPhaseCmd.Flags().StringVar(&addressBMnemonic, "address-b-mnemonic", "",
 		"25-word mnemonic of player B")
-	markFlagRequired(queryPhaseCmd.Flags(), "address-b-mnemonic")
+	daemon.MarkFlagRequired(queryPhaseCmd.Flags(), "address-b-mnemonic")
 
 	queryPhaseCmd.Flags().StringVar(&oraclePKAddressString, "oracle-pk", "",
 		"an Algorand address representation of the oracle's PK")
-	markFlagRequired(queryPhaseCmd.Flags(), "oracle-pk")
+	daemon.MarkFlagRequired(queryPhaseCmd.Flags(), "oracle-pk")
 
 	queryPhaseCmd.Flags().StringVar(&oracleOwnerAddressString, "oracle-owner", "",
 		"the oracle owner address")
-	markFlagRequired(queryPhaseCmd.Flags(), "oracle-owner")
+	daemon.MarkFlagRequired(queryPhaseCmd.Flags(), "oracle-owner")
 
 	queryPhaseCmd.Flags().Uint64Var(&block, "block", 0,
 		"the block to take the seed for the VRF input")
-	markFlagRequired(queryPhaseCmd.Flags(), "block")
+	daemon.MarkFlagRequired(queryPhaseCmd.Flags(), "block")
 }
 
 func testArguments() (ed25519.PrivateKey, ed25519.PrivateKey, types.Address, types.Address, error) {
@@ -99,7 +101,7 @@ func randomHex(n int) (string, []byte, error) {
 func computeX(addressA, addressB types.Address, counterBytes []byte) []byte {
 	toHash := append(addressA[:], addressB[:]...)
 	toHash = append(toHash, counterBytes...)
-	hashed := sha256.Sum256(toHash)
+	hashed := sha512.Sum512_256(toHash)
 	return hashed[:]
 }
 
@@ -107,12 +109,12 @@ var queryPhaseCmd = &cobra.Command{
 	Use:   "query",
 	Short: "test query phase",
 	Run: func(cmd *cobra.Command, args []string) {
-		err := testEnvironmentVariables()
+		err := daemon.TestEnvironmentVariables()
 		if err != nil {
 			log.Error(err)
 			return
 		}
-		algodClient, _, err := initClients(algodAddress, algodToken, indexerAddress, indexerToken)
+		algodClient, _, err := daemon.InitClients(daemon.AlgodAddress, daemon.AlgodToken, daemon.IndexerAddress, daemon.IndexerToken)
 		if err != nil {
 			log.Error(err)
 			return
@@ -136,17 +138,17 @@ var queryPhaseCmd = &cobra.Command{
 		addressB := privateKeyToAddress(addressBSK)
 		counter := fmt.Sprintf("0x%s", randomCounter)
 		fmt.Printf("counter is: %s\n", counter)
-		escrowTealParams := EscrowTealParams{
+		escrowTealParams := compile.EscrowTealParams{
 			AddressA:   addressA,
 			AddressB:   addressB,
 			CounterHex: counter,
 		}
-		escrowProgram, err := CompileEscrow(escrowTealParams, algodClient)
+		escrowProgram, err := compile.CompileEscrow(escrowTealParams, algodClient)
 		if err != nil {
 			log.Error(err)
 			return
 		}
-		_, escrowSuffixB64, _ := tools.CutTeal(escrowProgram, 28, 107)
+		_, escrowSuffixB64, _ := tealtools.CutTeal(escrowProgram, 28, 107)
 		escrowSuffix, err := base64.StdEncoding.DecodeString(escrowSuffixB64)
 		if err != nil {
 			log.Error(err)
@@ -155,7 +157,7 @@ var queryPhaseCmd = &cobra.Command{
 		escrowAddress := crypto.AddressFromProgram(escrowProgram)
 		oraclePKb32 := base32.StdEncoding.EncodeToString(oraclePKAddress[:])
 		x := computeX(addressA, addressB, randomCounterBytes)
-		oracleTealParams := OracleTealParams{
+		oracleTealParams := compile.OracleTealParams{
 			AppIDHex:     fmt.Sprintf("0x%016x", appID),
 			Arg0:         "vrf",
 			Block:        fmt.Sprintf("%08d", block),
@@ -164,7 +166,7 @@ var queryPhaseCmd = &cobra.Command{
 			SigningPKb32: oraclePKb32,
 			OwnerAddr:    oracleOwnerAddress,
 		}
-		oracleProgram, err := CompileOracle(oracleTealParams, algodClient)
+		oracleProgram, err := compile.CompileOracle(oracleTealParams, algodClient)
 		if err != nil {
 			log.Error(err)
 			return
@@ -172,7 +174,11 @@ var queryPhaseCmd = &cobra.Command{
 		oracleEscrowAddress := crypto.AddressFromProgram(oracleProgram)
 		fmt.Printf("please fund the escrow %s and the oracle escrow %s accounts and press ENTER\n",
 			escrowAddress, oracleEscrowAddress)
-		fmt.Scanln()
+		_, err = fmt.Scanln()
+		if err != nil {
+			log.Error(err)
+			return
+		}
 		aToEscrowTxn, err := future.MakePaymentTxn(
 			addressA.String(),
 			escrowAddress.String(),

@@ -1,11 +1,10 @@
-package main
+package daemon
 
 import (
 	"container/heap"
 	"context"
 	"crypto/ed25519"
 	"crypto/sha512"
-	"encoding/base32"
 	"encoding/base64"
 	"fmt"
 	"github.com/algorand/go-algorand-sdk/client/v2/algod"
@@ -15,6 +14,10 @@ import (
 	"github.com/algorand/go-algorand-sdk/future"
 	"github.com/algorand/go-algorand-sdk/transaction"
 	"github.com/algorand/go-algorand-sdk/types"
+	"github.com/ori-shem-tov/vrf-oracle/libsodium-wrapper"
+	models2 "github.com/ori-shem-tov/vrf-oracle/models"
+	"github.com/ori-shem-tov/vrf-oracle/teal/compile"
+	"github.com/ori-shem-tov/vrf-oracle/tools"
 	"os"
 	"strconv"
 	"strings"
@@ -29,59 +32,33 @@ import (
 
 var (
 	signingMnemonicString string
-	vrfMnemonicString	  string
+	vrfMnemonicString     string
 	ownerAddressString    string
 	startingRound         uint64
 	oFee                  uint64
-	algodAddress          = os.Getenv("AF_ALGOD_ADDRESS")
-	algodToken            = os.Getenv("AF_ALGOD_TOKEN")
-	indexerAddress        = os.Getenv("AF_IDX_ADDRESS")
-	indexerToken          = os.Getenv("AF_IDX_TOKEN")
-	logLevelEnv			  = strings.ToLower(os.Getenv("VRF_LOG_LEVEL"))
+	AlgodAddress          = os.Getenv("AF_ALGOD_ADDRESS")
+	AlgodToken            = os.Getenv("AF_ALGOD_TOKEN")
+	IndexerAddress        = os.Getenv("AF_IDX_ADDRESS")
+	IndexerToken          = os.Getenv("AF_IDX_TOKEN")
+	logLevelEnv           = strings.ToLower(os.Getenv("VRF_LOG_LEVEL"))
 )
 
 const (
 	constNotePrefix     = "vrf-v0"
 	waitBetweenBlocksMS = 4000
-	minNoteLength       = 151 // len("vrf-v1") + len(opk) + len(OOwnerAddr) + len(S) + len(T) + len(x) + len(appId) + 1
+	minNoteLength       = 151 // len("vrf-v1") + len(opk) + len(OOwnerAddr) + len(S) + len(T) + len(X) + len(appId) + 1
 	oracleEscrowLogicPrefixBase64 = "MgQiE0AAVzEWIxJAABcxFiQSQAABADEQJBIx" +
 		"CCMSEDEJKBIQQzEQJRIxGCkXEhA2GgAqEhA2GgErEhA2GgMnBBIQNhwBJwUSEDEAK1A2GgJQJwRQNhoEUC0nBgQQQyND"
 )
 
-type VrfRequest struct {
-	oraclePublicKey ed25519.PublicKey
-	ownerAddress    types.Address
-	sender          types.Address
-	blockNumber     uint64
-	blockNumberBytes [8]byte
-	x               [32]byte
-	appID           uint64
-	appIDBytes 		[8]byte
-	arg0            string
-}
-
-func (r *VrfRequest) OracleTealParams() (OracleTealParams, error) {
-	var result OracleTealParams
-
-	result.Arg0 = r.arg0
-	result.AppIDHex = fmt.Sprintf("0x%016x", r.appID)
-	result.Block = fmt.Sprintf("%08d", r.blockNumber)
-	result.Sender = r.sender
-	result.OwnerAddr = r.ownerAddress
-	result.SigningPKb32 = base32.StdEncoding.EncodeToString(r.oraclePublicKey)
-	result.Xb32 = base32.StdEncoding.EncodeToString(r.x[:])
-
-	return result, result.Validate()
-}
-
-func markFlagRequired(flag *pflag.FlagSet, name string) {
+func MarkFlagRequired(flag *pflag.FlagSet, name string) {
 	err := cobra.MarkFlagRequired(flag, name)
 	if err != nil {
 		panic(err)
 	}
 }
 
-func setLogger() {
+func SetLogger() {
 	log.SetFormatter(&log.TextFormatter{FullTimestamp: true})
 	logLevel := log.WarnLevel
 	if logLevelEnv == "debug" {
@@ -93,23 +70,23 @@ func setLogger() {
 }
 
 func init() {
-	setLogger()
+	SetLogger()
 
-	runDaemonCmd.Flags().StringVar(&signingMnemonicString, "signing-mnemonic", "",
+	RunDaemonCmd.Flags().StringVar(&signingMnemonicString, "signing-mnemonic", "",
 		"25-word mnemonic of the oracle for signing (required)")
-	markFlagRequired(runDaemonCmd.Flags(), "signing-mnemonic")
+	MarkFlagRequired(RunDaemonCmd.Flags(), "signing-mnemonic")
 
-	runDaemonCmd.Flags().StringVar(&vrfMnemonicString, "vrf-mnemonic", "",
+	RunDaemonCmd.Flags().StringVar(&vrfMnemonicString, "vrf-mnemonic", "",
 		"25-word mnemonic of the oracle for computing vrf (required)")
-	markFlagRequired(runDaemonCmd.Flags(), "vrf-mnemonic")
+	MarkFlagRequired(RunDaemonCmd.Flags(), "vrf-mnemonic")
 
-	runDaemonCmd.Flags().StringVar(&ownerAddressString, "owner", "", "the oracle's owner address (required)")
-	markFlagRequired(runDaemonCmd.Flags(), "owner")
+	RunDaemonCmd.Flags().StringVar(&ownerAddressString, "owner", "", "the oracle's owner address (required)")
+	MarkFlagRequired(RunDaemonCmd.Flags(), "owner")
 
-	runDaemonCmd.Flags().Uint64Var(&startingRound, "round", 0,
+	RunDaemonCmd.Flags().Uint64Var(&startingRound, "round", 0,
 		"the round to start scanning from (optional. default: current round)")
 
-	runDaemonCmd.Flags().Uint64Var(&oFee, "oracle-fee", 1000,
+	RunDaemonCmd.Flags().Uint64Var(&oFee, "oracle-fee", 1000,
 		"the fee payed to the oracle for its service in MicroAlgos (optional)")
 
 }
@@ -123,20 +100,20 @@ func computeWaitFactor(roundFromIndexer uint64, roundToFetch uint64) float64 {
 	return 1 / float64(roundFromIndexer-roundToFetch)
 }
 
-func buildAnswerPhaseTransactionsGroup(vrfRequest VrfRequest, blockSeed, vrfOutput, oeSuffix []byte, signedVrfOutput types.Signature, sp types.SuggestedParams, oracleEscrow, ownerAddress types.Address, lsig types.LogicSig) ([]byte, error) {
+func buildAnswerPhaseTransactionsGroup(vrfRequest models2.VrfRequest, blockSeed, vrfOutput, oeSuffix []byte, signedVrfOutput types.Signature, sp types.SuggestedParams, oracleEscrow, ownerAddress types.Address, lsig types.LogicSig) ([]byte, error) {
 	appArgs := [][]byte{
-		[]byte(vrfRequest.arg0),
-		vrfRequest.blockNumberBytes[:],
+		[]byte(vrfRequest.Arg0),
+		vrfRequest.BlockNumberBytes[:],
 		blockSeed,
-		vrfRequest.x[:],
+		vrfRequest.X[:],
 		vrfOutput,
 		signedVrfOutput[:],
 		oeSuffix,
 	}
 	lsig.Args = [][]byte{signedVrfOutput[:]}
-	accounts := []string{vrfRequest.sender.String()}
+	accounts := []string{vrfRequest.Sender.String()}
 	appCall, err := future.MakeApplicationNoOpTx(
-		vrfRequest.appID,
+		vrfRequest.AppID,
 		appArgs,
 		accounts,
 		nil,
@@ -178,8 +155,8 @@ func buildAnswerPhaseTransactionsGroup(vrfRequest VrfRequest, blockSeed, vrfOutp
 	return signedGroup, nil
 }
 
-func getVrfPrivateKey(key ed25519.PrivateKey) VrfPrivkey {
-	var vrfPrivateKey VrfPrivkey
+func getVrfPrivateKey(key ed25519.PrivateKey) libsodium_wrapper.VrfPrivkey {
+	var vrfPrivateKey libsodium_wrapper.VrfPrivkey
 	copy(vrfPrivateKey[:], key)
 	return vrfPrivateKey
 }
@@ -193,7 +170,7 @@ func buildVrfInput(blockNumber [8]byte, blockSeed []byte, x [32]byte) [sha512.Si
 func computeAndSignVrf(blockNumber [8]byte, blockSeed []byte, x [32]byte, oracleEscrowAddress types.Address, oracleSigningKey ed25519.PrivateKey, oracleVrfKey ed25519.PrivateKey) (types.Signature, []byte, error) {
 	vrfInput := buildVrfInput(blockNumber, blockSeed, x)
 	vrfPrivateKey := getVrfPrivateKey(oracleVrfKey)
-	proof, ok := vrfPrivateKey.proveBytes(vrfInput[:])
+	proof, ok := vrfPrivateKey.ProveBytes(vrfInput[:])
 	if !ok {
 		return types.Signature{}, []byte{}, fmt.Errorf("error computing vrf proof")
 	}
@@ -212,12 +189,12 @@ func computeAndSignVrf(blockNumber [8]byte, blockSeed []byte, x [32]byte, oracle
 	return sig, vrfOutput[:], nil
 }
 
-func getOracleLogic(vrfRequest VrfRequest, algodClient *algod.Client) (types.LogicSig, error) {
+func getOracleLogic(vrfRequest models2.VrfRequest, algodClient *algod.Client) (types.LogicSig, error) {
 	oracleTealParams, err := vrfRequest.OracleTealParams()
 	if err != nil {
 		return types.LogicSig{}, fmt.Errorf("bad TEAL template params: %v", err)
 	}
-	logic, err := CompileOracle(oracleTealParams, algodClient)
+	logic, err := compile.CompileOracle(oracleTealParams, algodClient)
 	if err != nil {
 		return types.LogicSig{}, fmt.Errorf("error compiling TEAL: %v", err)
 	}
@@ -226,7 +203,7 @@ func getOracleLogic(vrfRequest VrfRequest, algodClient *algod.Client) (types.Log
 	}, nil
 }
 
-func handleRequestsForCurrentRound(requestsToHandle []VrfRequest, block models.Block, signingPrivateKey,
+func handleRequestsForCurrentRound(requestsToHandle []models2.VrfRequest, block models.Block, signingPrivateKey,
 	vrfPrivateKey ed25519.PrivateKey, ownerAddress types.Address, oeSuffix []byte,
 	suggestedParams types.SuggestedParams, algodClient *algod.Client) {
 	for _, currentRequestHandled := range requestsToHandle {
@@ -238,9 +215,9 @@ func handleRequestsForCurrentRound(requestsToHandle []VrfRequest, block models.B
 		log.Debugf("lsig b64: %v", base64.StdEncoding.EncodeToString(oracleLogicSig.Logic))
 		oracleEscrowAddr := crypto.AddressFromProgram(oracleLogicSig.Logic)
 		sig, vrfOutput, err := computeAndSignVrf(
-			currentRequestHandled.blockNumberBytes,
+			currentRequestHandled.BlockNumberBytes,
 			block.Seed,
-			currentRequestHandled.x,
+			currentRequestHandled.X,
 			oracleEscrowAddr,
 			signingPrivateKey,
 			vrfPrivateKey,
@@ -284,7 +261,7 @@ func handleRequestsForCurrentRound(requestsToHandle []VrfRequest, block models.B
 
 func getSuggestedParams(algodClient *algod.Client) (types.SuggestedParams, error) {
 	var sp types.SuggestedParams
-	err := Retry(1, 5,
+	err := tools.Retry(1, 5,
 		func() error {
 			var err error
 			sp, err = algodClient.SuggestedParams().Do(context.Background())
@@ -299,7 +276,7 @@ func getSuggestedParams(algodClient *algod.Client) (types.SuggestedParams, error
 
 func getBlock(indexerClient *indexer.Client, round uint64) (models.Block, error) {
 	var block models.Block
-	err := Retry(1, 5,
+	err := tools.Retry(1, 5,
 		func() error {
 			var err error
 			block, err = indexerClient.LookupBlock(round).Do(context.Background())
@@ -312,19 +289,19 @@ func getBlock(indexerClient *indexer.Client, round uint64) (models.Block, error)
 	return block, err
 }
 
-func getVrfRequestsToHandle(h *VrfRequestsHeap, currentRound uint64) []VrfRequest {
-	var result []VrfRequest
+func getVrfRequestsToHandle(h *tools.VrfRequestsHeap, currentRound uint64) []models2.VrfRequest {
+	var result []models2.VrfRequest
 	for{
 		if len(*h) < 1 {
 			break
 		}
 		top := (*h)[0]
-		if top.blockNumber > currentRound {
+		if top.BlockNumber > currentRound {
 			log.Infof("handled all requests for round %d", currentRound)
 			break
 		}
-		currentNoteHandled := heap.Pop(h).(VrfRequest)
-		if currentNoteHandled.blockNumber < currentRound {
+		currentNoteHandled := heap.Pop(h).(models2.VrfRequest)
+		if currentNoteHandled.BlockNumber < currentRound {
 			log.Warnf("found unhandled old request in queue: %v", currentNoteHandled)
 			continue
 		}
@@ -333,52 +310,60 @@ func getVrfRequestsToHandle(h *VrfRequestsHeap, currentRound uint64) []VrfReques
 	return result
 }
 
-func parseNote(note []byte) (VrfRequest, error) {
-	var result VrfRequest
+func parseNote(note []byte) (models2.VrfRequest, error) {
+	var result models2.VrfRequest
 	var err error
 
-	if len(note) < minNoteLength || string(note[:6]) != constNotePrefix{
+	if len(note) < minNoteLength || string(note[:6]) != constNotePrefix {
 		return result, fmt.Errorf("error parsing note length")
 	}
 
-	result.oraclePublicKey = make([]byte, ed25519.PublicKeySize)
-	copy(result.oraclePublicKey[:], note[6:38])
-	copy(result.ownerAddress[:], note[38:70])
-	copy(result.sender[:], note[70:102])
-	result.blockNumber, err = strconv.ParseUint(string(note[102:110]), 10, 64)
+	result.OraclePublicKey = make([]byte, ed25519.PublicKeySize)
+	copy(result.OraclePublicKey[:], note[6:38])
+	copy(result.OwnerAddress[:], note[38:70])
+	copy(result.Sender[:], note[70:102])
+	result.BlockNumber, err = strconv.ParseUint(string(note[102:110]), 10, 64)
 	if err != nil {
 		return result, fmt.Errorf("error parsing note block number %v", note[102:110])
 	}
-	copy(result.blockNumberBytes[:], note[102:110])
-	copy(result.x[:], note[110:142])
-	result.appID, err = strconv.ParseUint(string(note[142:150]), 10, 64)
+	copy(result.BlockNumberBytes[:], note[102:110])
+	copy(result.X[:], note[110:142])
+	result.AppID, err = strconv.ParseUint(string(note[142:150]), 10, 64)
 	if err != nil {
-		return result, fmt.Errorf("error parsing note appID %v", note[142:150])
+		return result, fmt.Errorf("error parsing note AppID %v", note[142:150])
 	}
-	copy(result.appIDBytes[:], note[142:150])
-	result.arg0 = string(note[150:])
+	copy(result.AppIDBytes[:], note[142:150])
+	result.Arg0 = string(note[150:])
 
 	return result, nil
 }
 
-func validateTransaction(transaction models.Transaction, currentRound uint64) (VrfRequest, error) {
-	// TODO validate receiver is ORACLE ESCROW
+func validateTransaction(transaction models.Transaction, currentRound uint64, algodClient *algod.Client) (models2.VrfRequest, error) {
 	parsedNote, err := parseNote(transaction.Note)
 	if err != nil {
 		return parsedNote, err
 	}
-	if currentRound >= parsedNote.blockNumber {
+	if currentRound >= parsedNote.BlockNumber {
 		return parsedNote, fmt.Errorf("block number is not in the future")
 	}
-	if transaction.Sender != parsedNote.sender.String() {
+	if transaction.Sender != parsedNote.Sender.String() {
 		return parsedNote, fmt.Errorf("transaction sender doesn't match the note")
 	}
+	oracleLogicSig, err := getOracleLogic(parsedNote, algodClient)
+	if err != nil {
+		return parsedNote, fmt.Errorf("failed computing LogicSig for %v: %v", parsedNote, err)
+	}
+	oracleEscrowAddr := crypto.AddressFromProgram(oracleLogicSig.Logic)
+	if oracleEscrowAddr.String() != transaction.PaymentTransaction.Receiver {
+		return parsedNote, fmt.Errorf("transaction receiver is not the matching oracle")
+	}
+
 	return parsedNote, nil
 }
 
-func storeRequestsInHeap(h *VrfRequestsHeap, transactions []models.Transaction, currentRound uint64) {
+func storeRequestsInHeap(h *tools.VrfRequestsHeap, transactions []models.Transaction, currentRound uint64, algodClient *algod.Client) {
 	for _, txn := range transactions {
-		parsedNote, err := validateTransaction(txn, currentRound)
+		parsedNote, err := validateTransaction(txn, currentRound, algodClient)
 		if err != nil {
 			log.Warnf("%v", err)
 			continue
@@ -390,7 +375,7 @@ func storeRequestsInHeap(h *VrfRequestsHeap, transactions []models.Transaction, 
 
 func getTransactionsFromIndexer(indexerClient *indexer.Client, round uint64, notePrefix []byte, oFee uint64) (models.TransactionsResponse, error) {
 	var transactionsResponse models.TransactionsResponse
-	err := Retry(1, 5,
+	err := tools.Retry(1, 5,
 		func() error {
 			var err error
 			transactionsResponse, err = indexerClient.SearchForTransactions().
@@ -433,7 +418,7 @@ func mainLoop(startingRound uint64, algodClient *algod.Client, indexerClient *in
 	}
 	waitFactor := float64(1)
 	currentRound := startingRound
-	h := &VrfRequestsHeap{}
+	h := &tools.VrfRequestsHeap{}
 	heap.Init(h)
 	for {
 		sleepTime := time.Duration(waitFactor*waitBetweenBlocksMS) * time.Millisecond
@@ -447,7 +432,7 @@ func mainLoop(startingRound uint64, algodClient *algod.Client, indexerClient *in
 		}
 		log.Debugf("latest block from indexer: %d", transactionsResponse.CurrentRound)
 
-		storeRequestsInHeap(h, transactionsResponse.Transactions, currentRound)
+		storeRequestsInHeap(h, transactionsResponse.Transactions, currentRound, algodClient)
 
 		requestsToHandle := getVrfRequestsToHandle(h, currentRound)
 		if len(requestsToHandle) != 0 {
@@ -504,7 +489,7 @@ func getStartingRound(inputRound uint64, algodClient *algod.Client) (uint64, err
 	return status.LastRound, nil
 }
 
-func initClients(algodAddress, algodToken, indexerAddress, indexerToken string) (*algod.Client, *indexer.Client, error) {
+func InitClients(algodAddress, algodToken, indexerAddress, indexerToken string) (*algod.Client, *indexer.Client, error) {
 	var failedClients []string
 	algodClient, err := algod.MakeClient(algodAddress, algodToken)
 	if err != nil {
@@ -522,12 +507,12 @@ func initClients(algodAddress, algodToken, indexerAddress, indexerToken string) 
 	return algodClient, indexerClient, err
 }
 
-func testEnvironmentVariables() error {
+func TestEnvironmentVariables() error {
 	var missing []string
-	if algodAddress == "" {
+	if AlgodAddress == "" {
 		missing = append(missing, "AF_ALGOD_ADDRESS")
 	}
-	if indexerAddress == "" {
+	if IndexerAddress == "" {
 		missing = append(missing, "AF_IDX_ADDRESS")
 	}
 	if len(missing) > 0 {
@@ -536,16 +521,16 @@ func testEnvironmentVariables() error {
 	return nil
 }
 
-var runDaemonCmd = &cobra.Command{
+var RunDaemonCmd = &cobra.Command{
 	Use:   "run-daemon",
 	Short: "runs the daemon",
 	Run: func(cmd *cobra.Command, args []string) {
-		err := testEnvironmentVariables()
+		err := TestEnvironmentVariables()
 		if err != nil {
 			log.Error(err)
 			return
 		}
-		algodClient, indexerClient, err := initClients(algodAddress, algodToken, indexerAddress, indexerToken)
+		algodClient, indexerClient, err := InitClients(AlgodAddress, AlgodToken, IndexerAddress, IndexerToken)
 		if err != nil {
 			log.Error(err)
 			return

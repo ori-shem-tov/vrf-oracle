@@ -1,10 +1,11 @@
-package main
+package compile
 
 import (
 	"encoding/base32"
 	"fmt"
 	"github.com/algorand/go-algorand-sdk/client/v2/algod"
 	"github.com/algorand/go-algorand-sdk/types"
+	"github.com/ori-shem-tov/vrf-oracle/teal/templates"
 	"strconv"
 	"strings"
 )
@@ -58,5 +59,5 @@ func (oracleTealParams *OracleTealParams) Validate() error {
 
 // CompileOracle compiles ths oracle teal program
 func CompileOracle(oracleTealParams OracleTealParams, algodClient *algod.Client) ([]byte, error) {
-	return CompileTeal(&oracleTealParams, OracleTealTemplate, algodClient)
+	return CompileTeal(&oracleTealParams, templates.OracleTealTemplate, algodClient)
 }

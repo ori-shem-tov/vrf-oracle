@@ -1,12 +1,14 @@
 package main
 
 import (
+	"github.com/ori-shem-tov/vrf-oracle/cmd/daemon"
+	"github.com/ori-shem-tov/vrf-oracle/cmd/test"
 	"github.com/spf13/cobra"
 )
 
 func init() {
-	rootCmd.AddCommand(runDaemonCmd)
-	rootCmd.AddCommand(testCmd)
+	rootCmd.AddCommand(daemon.RunDaemonCmd)
+	rootCmd.AddCommand(test.TestCmd)
 }
 
 var rootCmd = &cobra.Command{
