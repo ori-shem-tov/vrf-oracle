@@ -7,6 +7,19 @@
 - add cancellation phase
 
 ## Build
+
+###  Linking go-aftools
+
+You need to link the private repo `go-aftools` in the correct place in `private/`.
+Be sure to have `go-aftools` up-to-date
+
+Concretely, if `$GOPATH` contains a single path:
+```
+ln -s $GOPATH/go-aftools private/github.com/algorandfoundation/
+```
+
+See https://cloud.google.com/appengine/docs/standard/go111/specifying-dependencies#final-go.mod-file for explanations of the reason why.
+
 ### Build libsodium from fork
 ```sh
 make build-libsodium
