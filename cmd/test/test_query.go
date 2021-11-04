@@ -95,7 +95,7 @@ func randomHex(n int) (string, []byte, error) {
 	if _, err := rand.Read(bytes); err != nil {
 		return "", bytes, err
 	}
-	return hex.EncodeToString(bytes), bytes, nil
+	return fmt.Sprintf("0x%s", hex.EncodeToString(bytes)), bytes, nil
 }
 
 func computeX(addressA, addressB types.Address, counterBytes []byte) []byte {
@@ -136,12 +136,11 @@ var queryPhaseCmd = &cobra.Command{
 		}
 		addressA := privateKeyToAddress(addressASK)
 		addressB := privateKeyToAddress(addressBSK)
-		counter := fmt.Sprintf("0x%s", randomCounter)
-		fmt.Printf("counter is: %s\n", counter)
+		fmt.Printf("counter is: %s\n", randomCounter)
 		escrowTealParams := compile.EscrowTealParams{
 			AddressA:   addressA,
 			AddressB:   addressB,
-			CounterHex: counter,
+			CounterHex: randomCounter,
 		}
 		escrowProgram, err := compile.CompileEscrow(escrowTealParams, algodClient)
 		if err != nil {

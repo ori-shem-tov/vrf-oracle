@@ -355,7 +355,8 @@ func validateTransaction(transaction models.Transaction, currentRound uint64, al
 	}
 	oracleEscrowAddr := crypto.AddressFromProgram(oracleLogicSig.Logic)
 	if oracleEscrowAddr.String() != transaction.PaymentTransaction.Receiver {
-		return parsedNote, fmt.Errorf("transaction receiver is not the matching oracle")
+		return parsedNote, fmt.Errorf("transaction receiver is not the matching oracle %s != %s",
+			transaction.PaymentTransaction.Receiver, oracleEscrowAddr)
 	}
 
 	return parsedNote, nil

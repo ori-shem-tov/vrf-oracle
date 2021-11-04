@@ -6,7 +6,6 @@ import (
 	"encoding/base32"
 	"fmt"
 	"github.com/algorand/go-algorand-sdk/client/v2/algod"
-	"github.com/algorand/go-algorand-sdk/client/v2/common/models"
 	"github.com/algorand/go-algorand-sdk/crypto"
 	"github.com/algorand/go-algorand-sdk/future"
 	"github.com/algorand/go-algorand-sdk/mnemonic"
@@ -15,7 +14,6 @@ import (
 	"github.com/ori-shem-tov/vrf-oracle/teal/compile"
 	"github.com/ori-shem-tov/vrf-oracle/teal/tealtools"
 	"github.com/ori-shem-tov/vrf-oracle/teal/templates"
-	"github.com/ori-shem-tov/vrf-oracle/tools"
 	log "github.com/sirupsen/logrus"
 	"github.com/spf13/cobra"
 )
@@ -42,15 +40,15 @@ func init() {
 }
 
 func createGameApp(appCreatorSK ed25519.PrivateKey, oraclePKAddress, oracleOwnerAddress types.Address,
-	algoClient *algod.Client, suggestedParams types.SuggestedParams) (string, error) {
+	algodClient *algod.Client, suggestedParams types.SuggestedParams) (uint64, error) {
 	appCreatorAddress := privateKeyToAddress(appCreatorSK)
-	oraclePrefix, _, oracleSuffixHash, err := cutOracle(algoClient)
+	oraclePrefix, _, oracleSuffixHash, err := cutOracle(algodClient)
 	if err != nil {
-		return "", fmt.Errorf("failed cutting oracle TEAL: %v", err)
+		return 0, fmt.Errorf("failed cutting oracle TEAL: %v", err)
 	}
-	escrowPrefix, _, escrowSuffixHash, err := cutEscrow(algoClient)
+	escrowPrefix, _, escrowSuffixHash, err := cutEscrow(algodClient)
 	if err != nil {
-		return "", fmt.Errorf("failed cutting escrow TEAL: %v", err)
+		return 0, fmt.Errorf("failed cutting escrow TEAL: %v", err)
 	}
 	oracleSigningPKB32 := base32.StdEncoding.EncodeToString(oraclePKAddress[:])
 	statefulGameTealParams := compile.StatefulGameTealParams{
@@ -61,9 +59,9 @@ func createGameApp(appCreatorSK ed25519.PrivateKey, oraclePKAddress, oracleOwner
 		OracleEscrowPrefixB64:     oraclePrefix,
 		OracleEscrowSuffixHashB64: oracleSuffixHash,
 	}
-	approval, err := compile.CompileStatefulGame(statefulGameTealParams, algoClient)
+	approval, err := compile.CompileStatefulGame(statefulGameTealParams, algodClient)
 	if err != nil {
-		return "", fmt.Errorf("failed compiling statful TEAL: %v", err)
+		return 0, fmt.Errorf("failed compiling statful TEAL: %v", err)
 	}
 	localStateSchema := types.StateSchema{
 		NumUint:      0,
@@ -85,19 +83,25 @@ func createGameApp(appCreatorSK ed25519.PrivateKey, oraclePKAddress, oracleOwner
 		types.Digest{},
 		[32]byte{},
 		types.Address{},
+		0,
 	)
 	if err != nil {
-		return "", fmt.Errorf("failed creating app call: %v", err)
+		return 0, fmt.Errorf("failed creating app call: %v", err)
 	}
 	_, stxBytes, err := crypto.SignTransaction(appCreatorSK, tx)
 	if err != nil {
-		return "", fmt.Errorf("failed signing app call: %v", err)
+		return 0, fmt.Errorf("failed signing app call: %v", err)
 	}
-	txID, err := algoClient.SendRawTransaction(stxBytes).Do(context.Background())
+	txID, err := algodClient.SendRawTransaction(stxBytes).Do(context.Background())
 	if err != nil {
-		return "", fmt.Errorf("failed sending app call: %v", err)
+		return 0, fmt.Errorf("failed sending app call: %v", err)
 	}
-	return txID, nil
+	res, err := waitForTx(algodClient, txID)
+	if err != nil {
+		return 0, err
+	}
+
+	return res.ApplicationIndex, nil
 }
 
 func cutOracle(algodClient *algod.Client) (string, string, string, error) {
@@ -151,12 +155,8 @@ var createAppCmd = &cobra.Command{
 			log.Error(err)
 			return
 		}
-		oraclePKAddress, err := types.DecodeAddress(oraclePKAddressString)
-		if err != nil {
-			log.Error(err)
-			return
-		}
-		oracleOwnerAddress, err := types.DecodeAddress(oracleOwnerAddressString)
+		oraclePKAddress, oracleOwnerAddress, err := decodeOracleAddresses(oraclePKAddressString,
+			oracleOwnerAddressString)
 		if err != nil {
 			log.Error(err)
 			return
@@ -167,30 +167,12 @@ var createAppCmd = &cobra.Command{
 			return
 		}
 
-		txID, err := createGameApp(appCreatorSK, oraclePKAddress, oracleOwnerAddress, algodClient, suggestedParams)
+		appID, err := createGameApp(appCreatorSK, oraclePKAddress, oracleOwnerAddress, algodClient, suggestedParams)
 		if err != nil {
 			log.Error(err)
 			return
 		}
-		var res models.PendingTransactionInfoResponse
-		err = tools.Retry(1, 5,
-			func() error {
-				var err error
-				res, _, err = algodClient.PendingTransactionInformation(txID).Do(context.Background())
-				if err == nil && (res.ConfirmedRound == 0 || res.PoolError != "") {
-					return fmt.Errorf("ConfirmedRound: %d, PoolError: %s", res.ConfirmedRound, res.PoolError)
-				}
-				return err
-			},
-			func(err error) {
-				log.Warnf("failed getting pending transaction info from algod, trying again...: %v", err)
-			},
-		)
-		if err != nil {
-			log.Error(err)
-			return
-		}
-		fmt.Printf("app id: %d\n", res.ApplicationIndex)
+		fmt.Printf("app id: %d\n", appID)
 	},
 }
 
