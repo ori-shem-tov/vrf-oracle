@@ -3,7 +3,8 @@ package test
 import (
 	"context"
 	"crypto/ed25519"
-	"encoding/base32"
+	"encoding/base64"
+	"encoding/binary"
 	"fmt"
 	"github.com/algorand/go-algorand-sdk/client/v2/algod"
 	"github.com/algorand/go-algorand-sdk/crypto"
@@ -11,15 +12,19 @@ import (
 	"github.com/algorand/go-algorand-sdk/mnemonic"
 	"github.com/algorand/go-algorand-sdk/types"
 	"github.com/ori-shem-tov/vrf-oracle/cmd/daemon"
-	"github.com/ori-shem-tov/vrf-oracle/teal/compile"
-	"github.com/ori-shem-tov/vrf-oracle/teal/tealtools"
-	"github.com/ori-shem-tov/vrf-oracle/teal/templates"
 	log "github.com/sirupsen/logrus"
 	"github.com/spf13/cobra"
+	"io/ioutil"
 )
 
 var (
 	appCreatorMnemonic         string
+	approvalProgramFilename string
+	clearProgramFilename string
+	ownerAddrString string
+	vrfServiceAddrString string
+	signingPKString string
+	shouldCreateDummy bool
 )
 
 func init() {
@@ -28,69 +33,114 @@ func init() {
 	createAppCmd.Flags().StringVar(&appCreatorMnemonic, "app-creator-mnemonic", "", "25-word mnemonic of the app creator")
 	daemon.MarkFlagRequired(createAppCmd.Flags(), "app-creator-mnemonic")
 
-	createAppCmd.Flags().StringVar(&oraclePKAddressString, "oracle-pk", "",
-		"an Algorand address representation of the oracle's PK")
-	daemon.MarkFlagRequired(createAppCmd.Flags(), "oracle-pk")
+	createAppCmd.Flags().StringVar(&approvalProgramFilename, "approval-program", "", "TEAL script of the approval program")
+	daemon.MarkFlagRequired(createAppCmd.Flags(), "approval-program")
 
-	createAppCmd.Flags().StringVar(&oracleOwnerAddressString, "oracle-owner", "",
-		"the oracle owner address")
-	daemon.MarkFlagRequired(createAppCmd.Flags(), "oracle-owner")
+	createAppCmd.Flags().StringVar(&clearProgramFilename, "clear-program", "", "TEAL script of the clear program")
+	daemon.MarkFlagRequired(createAppCmd.Flags(), "clear-program")
 
+	createAppCmd.Flags().StringVar(&ownerAddrString, "owner", "",
+		"the address of the owner receiving the fees")
+	daemon.MarkFlagRequired(createAppCmd.Flags(), "owner")
 
+	createAppCmd.Flags().StringVar(&vrfServiceAddrString, "vrf-service-addr", "",
+		"the address of the VRF service account submitting responses to the blockchain")
+	daemon.MarkFlagRequired(createAppCmd.Flags(), "vrf-service-addr")
+
+	createAppCmd.Flags().StringVar(&signingPKString, "signing-pk-addr", "",
+		"the public key used to sign VRF responses (expected as an address with checksum)")
+	daemon.MarkFlagRequired(createAppCmd.Flags(), "signing-pk-addr")
+
+	createAppCmd.Flags().Uint64Var(&fee, "fee", 0,
+		"service fee")
+	daemon.MarkFlagRequired(createAppCmd.Flags(), "fee")
+
+	createAppCmd.Flags().BoolVar(&shouldCreateDummy, "should-create-dummy", false, "pass if a dummy app is also needed")
 }
 
-func createGameApp(appCreatorSK ed25519.PrivateKey, oraclePKAddress, oracleOwnerAddress types.Address,
-	algodClient *algod.Client, suggestedParams types.SuggestedParams) (uint64, error) {
-	appCreatorAddress := privateKeyToAddress(appCreatorSK)
-	oraclePrefix, _, oracleSuffixHash, err := cutOracle(algodClient)
+func generateAppArgsSlice(owner, vrfService, signingPK types.Address, fee uint64) [][]byte {
+	feeBytes := make([]byte, 8)
+	binary.BigEndian.PutUint64(feeBytes, fee)
+	return [][]byte{
+		owner[:],
+		vrfService[:],
+		signingPK[:],
+		feeBytes,
+	}
+}
+
+func generateSignedAppCreate(approvalBytes, clearBytes []byte, globalState, localState types.StateSchema,
+	appCreatorSK ed25519.PrivateKey, args [][]byte, sp types.SuggestedParams) ([]byte, error) {
+	sender, err := crypto.GenerateAddressFromSK(appCreatorSK)
 	if err != nil {
-		return 0, fmt.Errorf("failed cutting oracle TEAL: %v", err)
-	}
-	escrowPrefix, _, escrowSuffixHash, err := cutEscrow(algodClient)
-	if err != nil {
-		return 0, fmt.Errorf("failed cutting escrow TEAL: %v", err)
-	}
-	oracleSigningPKB32 := base32.StdEncoding.EncodeToString(oraclePKAddress[:])
-	statefulGameTealParams := compile.StatefulGameTealParams{
-		GameEscrowPrefixB64:       escrowPrefix,
-		GameEscrowSuffixHashB64:   escrowSuffixHash,
-		OracleSigningPKB32:        oracleSigningPKB32,
-		OracleOwnerAddress:        oracleOwnerAddress,
-		OracleEscrowPrefixB64:     oraclePrefix,
-		OracleEscrowSuffixHashB64: oracleSuffixHash,
-	}
-	approval, err := compile.CompileStatefulGame(statefulGameTealParams, algodClient)
-	if err != nil {
-		return 0, fmt.Errorf("failed compiling statful TEAL: %v", err)
-	}
-	localStateSchema := types.StateSchema{
-		NumUint:      0,
-		NumByteSlice: 6,
+		return nil, err
 	}
 	tx, err := future.MakeApplicationCreateTx(
 		false,
-		approval,
-		templates.StatefulGameClear,
-		types.StateSchema{},
-		localStateSchema,
+		approvalBytes,
+		clearBytes,
+		globalState,
+		localState,
+		args,
 		nil,
 		nil,
 		nil,
-		nil,
-		suggestedParams,
-		appCreatorAddress,
+		sp,
+		sender,
 		nil,
 		types.Digest{},
 		[32]byte{},
-		types.Address{},
-		0,
+		types.ZeroAddress,
 	)
 	if err != nil {
-		return 0, fmt.Errorf("failed creating app call: %v", err)
+		return nil, err
 	}
 	_, stxBytes, err := crypto.SignTransaction(appCreatorSK, tx)
 	if err != nil {
-		return 0, fmt.Errorf("failed signing app call: %v", err)
+		return nil, err
+	}
+	return stxBytes, nil
+}
+
+func createApp(approvalProgram, clearProgram []byte, appCreatorSK ed25519.PrivateKey, owner, service, signingPK types.Address, fee uint64,
+	algodClient *algod.Client, suggestedParams types.SuggestedParams) (uint64, error) {
+	
+	globalStateSchema := types.StateSchema{
+		NumUint:      2,
+		NumByteSlice: 3,
+	}
+
+	localStateSchema := types.StateSchema{
+		NumUint:      1,
+		NumByteSlice: 2,
+	}
+
+	appArgs := generateAppArgsSlice(owner, service, signingPK, fee)
+	
+	stxBytes, err := generateSignedAppCreate(approvalProgram, clearProgram, globalStateSchema,
+		localStateSchema, appCreatorSK, appArgs, suggestedParams)
+	if err != nil {
+		return 0, err
+	}
+
+	txID, err := algodClient.SendRawTransaction(stxBytes).Do(context.Background())
+	if err != nil {
+		return 0, fmt.Errorf("failed sending app call: %v", err)
+	}
+	res, err := waitForTx(algodClient, txID)
+	if err != nil {
+		return 0, err
+	}
+
+	return res.ApplicationIndex, nil
+}
+
+func createDummyApp(approvalProgram []byte, appCreatorSK ed25519.PrivateKey, algodClient *algod.Client,
+	suggestedParams types.SuggestedParams) (uint64, error) {
+	stxBytes, err := generateSignedAppCreate(approvalProgram, approvalProgram, types.StateSchema{},
+		types.StateSchema{}, appCreatorSK, nil, suggestedParams)
+	if err != nil {
+		return 0, err
 	}
 	txID, err := algodClient.SendRawTransaction(stxBytes).Do(context.Background())
 	if err != nil {
@@ -104,36 +154,34 @@ func createGameApp(appCreatorSK ed25519.PrivateKey, oraclePKAddress, oracleOwner
 	return res.ApplicationIndex, nil
 }
 
-func cutOracle(algodClient *algod.Client) (string, string, string, error) {
-	oracleTealParams := compile.OracleTealParams{
-		AppIDHex:     "0x1234567812345678",
-		Arg0:         "vrf",
-		Block:        "11111111",
-		Xb32:         "CQQOAKRGOMQAHWWV7RS23345OFAUBPNMV2SIDQ3WFQ2RGA6T3KCQ====",
-		Sender:       types.Address([32]byte{1, 2, 3, 4, 5, 6}),
-		SigningPKb32: "YUO5WDTSKVI5VADGDNGDCFDTPDO2TQMH2OZGZ6MLDXA6G2ZU5CDQ====",
-		OwnerAddr:    types.Address([32]byte{6, 5, 4, 3, 2, 1}),
-	}
-	program, err := compile.CompileOracle(oracleTealParams, algodClient)
+func compileTeal(approvalProgramFilename, clearProgramFilename string, algodClient *algod.Client) ([]byte, []byte, error) {
+	approval, err := ioutil.ReadFile(approvalProgramFilename)
 	if err != nil {
-		return "", "", "", err
+		return nil, nil, err
 	}
-	prefix, suffix, suffixHash := tealtools.CutTeal(program, 9, 163)
-	return prefix, suffix, suffixHash, nil
-}
+	clear, err := ioutil.ReadFile(clearProgramFilename)
+	if err != nil {
+		return nil, nil, err
+	}
+	compiledApprovalObject, err := algodClient.TealCompile(approval).Do(context.Background())
+	if err != nil {
+		return nil, nil, err
+	}
+	compiledClearObject, err := algodClient.TealCompile(clear).Do(context.Background())
+	if err != nil {
+		return nil, nil, err
+	}
 
-func cutEscrow(algodClient *algod.Client) (string, string, string, error) {
-	escrowTealParams := compile.EscrowTealParams{
-		AddressA:   types.Address([32]byte{1, 2, 3, 4, 5, 6}),
-		AddressB:   types.Address([32]byte{6, 5, 4, 3, 2, 1}),
-		CounterHex: "0x1234567812345678",
-	}
-	program, err := compile.CompileEscrow(escrowTealParams, algodClient)
+	compiledApprovalBytes, err := base64.StdEncoding.DecodeString(compiledApprovalObject.Result)
 	if err != nil {
-		return "", "", "", err
+		return nil, nil, err
 	}
-	prefix, suffix, suffixHash := tealtools.CutTeal(program, 28, 107)
-	return prefix, suffix, suffixHash, nil
+	compiledClearBytes, err := base64.StdEncoding.DecodeString(compiledClearObject.Result)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	return compiledApprovalBytes, compiledClearBytes, nil
 }
 
 var createAppCmd = &cobra.Command{
@@ -155,24 +203,55 @@ var createAppCmd = &cobra.Command{
 			log.Error(err)
 			return
 		}
-		oraclePKAddress, oracleOwnerAddress, err := decodeOracleAddresses(oraclePKAddressString,
-			oracleOwnerAddressString)
+
+		owner, err := types.DecodeAddress(ownerAddrString)
 		if err != nil {
 			log.Error(err)
 			return
 		}
-		suggestedParams, err := algodClient.SuggestedParams().Do(context.Background())
+		vrfService, err := types.DecodeAddress(vrfServiceAddrString)
+		if err != nil {
+			log.Error(err)
+			return
+		}
+		signingPKAddr, err := types.DecodeAddress(signingPKString)
 		if err != nil {
 			log.Error(err)
 			return
 		}
 
-		appID, err := createGameApp(appCreatorSK, oraclePKAddress, oracleOwnerAddress, algodClient, suggestedParams)
+		approvalBytes, clearBytes, err := compileTeal(approvalProgramFilename, clearProgramFilename, algodClient)
 		if err != nil {
 			log.Error(err)
 			return
 		}
-		fmt.Printf("app id: %d\n", appID)
+
+		approvalHashAddr := crypto.AddressFromProgram(approvalBytes)
+
+		sp, err := algodClient.SuggestedParams().Do(context.Background())
+		if err != nil {
+			log.Error(err)
+			return
+		}
+
+		appID, err := createApp(approvalBytes, clearBytes, appCreatorSK, owner, vrfService, signingPKAddr, fee, algodClient, sp)
+
+		if err != nil {
+			log.Error(err)
+			return
+		}
+		fmt.Printf("app id: %d\napproval hash: %s\n", appID, approvalHashAddr)
+		appAddress := crypto.GetApplicationAddress(appID)
+		fmt.Printf("app address: %s\n", appAddress)
+		fmt.Println("please fund to meet the minimum balance requirement")
+		if shouldCreateDummy {
+			dummyAppID, err := createDummyApp([]byte{0x05, 0x20, 0x01, 0x01, 0x22}, appCreatorSK, algodClient, sp)
+			if err != nil {
+				log.Error(err)
+				return
+			}
+			fmt.Printf("dummy app id: %d\n", dummyAppID)
+		}
 	},
 }
 

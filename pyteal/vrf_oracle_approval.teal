@@ -1,0 +1,257 @@
+#pragma version 5
+txn ApplicationID
+int 0
+==
+bnz main_l22
+txn OnCompletion
+int OptIn
+==
+bnz main_l21
+txn OnCompletion
+int CloseOut
+==
+bnz main_l18
+txn OnCompletion
+int DeleteApplication
+==
+bnz main_l17
+txn OnCompletion
+int UpdateApplication
+==
+bnz main_l16
+txn OnCompletion
+int NoOp
+==
+bnz main_l7
+err
+main_l7:
+txna ApplicationArgs 0
+byte "request"
+==
+bnz main_l15
+txna ApplicationArgs 0
+byte "respond"
+==
+bnz main_l14
+txna ApplicationArgs 0
+byte "cancel"
+==
+bnz main_l13
+txna ApplicationArgs 0
+byte "withdraw_lost_funds"
+==
+bnz main_l12
+err
+main_l12:
+txn Sender
+byte "owner"
+app_global_get
+==
+assert
+itxn_begin
+int pay
+itxn_field TypeEnum
+txn Sender
+itxn_field Receiver
+byte "lost_funds"
+app_global_get
+itxn_field Amount
+int 0
+itxn_field Fee
+itxn_submit
+byte "lost_funds"
+int 0
+app_global_put
+int 1
+return
+main_l13:
+global Round
+int 5
++
+txn Sender
+byte "request_round"
+app_local_get
+<
+txn Sender
+byte "request_round"
+app_local_get
+int 0
+!=
+global Round
+txn Sender
+byte "request_round"
+app_local_get
+int 100
++
+>
+&&
+||
+assert
+txn Sender
+byte "request_round"
+int 0
+app_local_put
+itxn_begin
+int pay
+itxn_field TypeEnum
+txn Sender
+itxn_field Receiver
+byte "service_fee"
+app_global_get
+itxn_field Amount
+int 0
+itxn_field Fee
+itxn_submit
+int 1
+return
+main_l14:
+txn Sender
+byte "vrf_service"
+app_global_get
+==
+assert
+txna Accounts 1
+byte "request_round"
+app_local_get
+txna ApplicationArgs 1
+btoi
+==
+assert
+txna ApplicationArgs 1
+txna ApplicationArgs 2
+concat
+txna Accounts 1
+byte "user_seed"
+app_local_get
+concat
+txna ApplicationArgs 3
+concat
+txna ApplicationArgs 4
+byte "signing_pk"
+app_global_get
+ed25519verify
+assert
+txna Accounts 1
+byte "request_round"
+int 0
+app_local_put
+txna Accounts 1
+byte "response"
+txna ApplicationArgs 3
+app_local_put
+itxn_begin
+int pay
+itxn_field TypeEnum
+byte "owner"
+app_global_get
+itxn_field Receiver
+byte "service_fee"
+app_global_get
+itxn_field Amount
+int 0
+itxn_field Fee
+itxn_submit
+int 1
+return
+main_l15:
+global GroupSize
+int 2
+>=
+assert
+txn GroupIndex
+int 1
+-
+gtxns Receiver
+global CurrentApplicationAddress
+==
+assert
+txn GroupIndex
+int 1
+-
+gtxns TypeEnum
+int pay
+==
+assert
+txn GroupIndex
+int 1
+-
+gtxns Amount
+byte "service_fee"
+app_global_get
+==
+assert
+global Round
+int 10
++
+txna ApplicationArgs 1
+btoi
+<
+assert
+txn Sender
+byte "request_round"
+app_local_get
+int 0
+==
+assert
+txn Sender
+byte "request_round"
+txna ApplicationArgs 1
+btoi
+app_local_put
+txn Sender
+byte "user_seed"
+txna ApplicationArgs 2
+app_local_put
+int 1
+return
+main_l16:
+txn Sender
+global CreatorAddress
+==
+return
+main_l17:
+txn Sender
+global CreatorAddress
+==
+return
+main_l18:
+txn Sender
+byte "request_round"
+app_local_get
+int 0
+!=
+bnz main_l20
+main_l19:
+int 1
+return
+main_l20:
+byte "lost_funds"
+byte "lost_funds"
+app_global_get
+byte "service_fee"
+app_global_get
++
+app_global_put
+b main_l19
+main_l21:
+int 1
+return
+main_l22:
+byte "owner"
+txna ApplicationArgs 0
+app_global_put
+byte "vrf_service"
+txna ApplicationArgs 1
+app_global_put
+byte "signing_pk"
+txna ApplicationArgs 2
+app_global_put
+byte "service_fee"
+txna ApplicationArgs 3
+btoi
+app_global_put
+byte "lost_funds"
+int 0
+app_global_put
+int 1
+return

@@ -2,14 +2,12 @@ package test
 
 import (
 	"context"
-	"encoding/base32"
 	"encoding/base64"
 	"fmt"
 	"github.com/algorand/go-algorand-sdk/client/v2/algod"
 	"github.com/algorand/go-algorand-sdk/client/v2/common/models"
 	"github.com/algorand/go-algorand-sdk/crypto"
 	"github.com/algorand/go-algorand-sdk/future"
-	"github.com/algorand/go-algorand-sdk/transaction"
 	"github.com/algorand/go-algorand-sdk/types"
 	"github.com/ori-shem-tov/vrf-oracle/cmd/daemon"
 	"github.com/ori-shem-tov/vrf-oracle/teal/compile"
@@ -17,6 +15,11 @@ import (
 	"github.com/ori-shem-tov/vrf-oracle/tools"
 	log "github.com/sirupsen/logrus"
 	"github.com/spf13/cobra"
+)
+
+var (
+	oraclePKAddressString string
+	oracleOwnerAddressString string
 )
 
 func init() {
@@ -75,7 +78,7 @@ func pay(algodClient *algod.Client, from crypto.Account, to types.Address, amoun
 	return res, err
 }
 
-func generateAndFuncFundingAccount() (crypto.Account, error) {
+func generateAndFundFundingAccount() (crypto.Account, error) {
 	fundingAccount := crypto.GenerateAccount()
 	fmt.Printf("please send %d Algos to the funding account @ %s and press ENTER\n", requiredFundingAlgos,
 		fundingAccount.Address)
@@ -146,189 +149,189 @@ var EndToEndCmd = &cobra.Command{
 	Use:   "e2e",
 	Short: "end-to-end test",
 	Run: func(cmd *cobra.Command, args []string) {
-		err := daemon.TestEnvironmentVariables()
-		if err != nil {
-			log.Error(err)
-			return
-		}
-		algodClient, _, err := daemon.InitClients(daemon.AlgodAddress, daemon.AlgodToken, daemon.IndexerAddress, daemon.IndexerToken)
-		if err != nil {
-			log.Error(err)
-			return
-		}
-		fundingAccount, err := generateAndFuncFundingAccount()
-		if err != nil {
-			log.Error(err)
-			return
-		}
-		suggestedParams, err := algodClient.SuggestedParams().Do(context.Background())
-		if err != nil {
-			log.Error(err)
-			return
-		}
-
-		appCreator, A, B, err := generateAndFundAccounts(fundingAccount, algodClient, suggestedParams)
-		if err != nil {
-			log.Error(err)
-			return
-		}
-
-		oraclePKAddress, oracleOwnerAddress, err := decodeOracleAddresses(oraclePKAddressString,
-			oracleOwnerAddressString)
-		if err != nil {
-			log.Error(err)
-			return
-		}
-
-		appID, err := createGameApp(appCreator.PrivateKey, oraclePKAddress, oracleOwnerAddress, algodClient,
-			suggestedParams)
-		if err != nil {
-			log.Error(err)
-			return
-		}
-		fmt.Printf("app id: %d\n", appID)
-
-		randomCounter, randomCounterBytes, err := randomHex(8)
-		if err != nil {
-			log.Error(err)
-			return
-		}
-		fmt.Printf("counter is: %s\n", randomCounter)
-
-		addressA := A.Address
-		addressB := B.Address
-		escrowProgram, escrowSuffix, escrowAddress, err := generateGameEscrow(algodClient, addressA, addressB,
-			randomCounter)
-		if err != nil {
-			log.Error(err)
-			return
-		}
-		res, err := pay(algodClient, fundingAccount, escrowAddress, 10000000, suggestedParams)
-		if err != nil {
-			log.Error(err)
-			return
-		}
-		block := res.ConfirmedRound + 10
-		fmt.Printf("block %d\n", block)
-		oraclePKb32 := base32.StdEncoding.EncodeToString(oraclePKAddress[:])
-		x := computeX(addressA, addressB, randomCounterBytes)
-		oracleTealParams := compile.OracleTealParams{
-			AppIDHex:     fmt.Sprintf("0x%016x", appID),
-			Arg0:         "vrf",
-			Block:        fmt.Sprintf("%08d", block),
-			Xb32:         base32.StdEncoding.EncodeToString(x),
-			Sender:       escrowAddress,
-			SigningPKb32: oraclePKb32,
-			OwnerAddr:    oracleOwnerAddress,
-		}
-		oracleProgram, err := compile.CompileOracle(oracleTealParams, algodClient)
-		if err != nil {
-			log.Error(err)
-			return
-		}
-		oracleEscrowAddress := crypto.AddressFromProgram(oracleProgram)
-
-		_, err = pay(algodClient, fundingAccount, oracleEscrowAddress, 10000000, suggestedParams)
-		if err != nil {
-			log.Error(err)
-			return
-		}
-
-		aToEscrowTxn, err := future.MakePaymentTxn(
-			addressA.String(),
-			escrowAddress.String(),
-			51000,
-			nil,
-			"",
-			suggestedParams,
-		)
-		if err != nil {
-			log.Error(err)
-			return
-		}
-		bToEscrowTxn, err := future.MakePaymentTxn(
-			addressB.String(),
-			escrowAddress.String(),
-			51000,
-			nil,
-			"",
-			suggestedParams,
-		)
-		if err != nil {
-			log.Error(err)
-			return
-		}
-		appArgs := [][]byte{
-			addressA[:],
-			addressB[:],
-			randomCounterBytes,
-			[]byte(fmt.Sprintf("%08d", block)),
-			{0},
-			escrowSuffix,
-
-		}
-		appOptIn, err := future.MakeApplicationOptInTx(
-			appID,
-			appArgs,
-			nil,
-			nil,
-			nil,
-			suggestedParams,
-			escrowAddress,
-			nil,
-			types.Digest{},
-			[32]byte{},
-			types.Address{},
-		)
-		note := []byte("vrf-v0")
-		note = append(note, oraclePKAddress[:]...)
-		note = append(note, oracleOwnerAddress[:]...)
-		note = append(note, escrowAddress[:]...)
-		note = append(note, []byte(fmt.Sprintf("%08d", block))...)
-		note = append(note, x...)
-		note = append(note, []byte(fmt.Sprintf("%08d", appID))...)
-		note = append(note, []byte("vrf")...)
-
-		escrowToOracleEscrowTxn, err := future.MakePaymentTxn(
-			escrowAddress.String(),
-			oracleEscrowAddress.String(),
-			50000,
-			note,
-			"",
-			suggestedParams,
-		)
-
-		grouped, err := transaction.AssignGroupID(
-			[]types.Transaction{aToEscrowTxn, bToEscrowTxn, appOptIn, escrowToOracleEscrowTxn}, "")
-
-		_, signedAToEscrowTxn, err := crypto.SignTransaction(A.PrivateKey, grouped[0])
-		if err != nil {
-			log.Error(err)
-			return
-		}
-		_, signedBToEscrowTxn, err := crypto.SignTransaction(B.PrivateKey, grouped[1])
-		if err != nil {
-			log.Error(err)
-			return
-		}
-		escrowLogicSig, err := crypto.MakeLogicSig(escrowProgram, [][]byte{[]byte("query")}, nil, crypto.MultisigAccount{})
-		_, signedAppOptIn, err := crypto.SignLogicsigTransaction(escrowLogicSig, grouped[2])
-		_, signedEscrowToOracleEscrowTxn, err := crypto.SignLogicsigTransaction(escrowLogicSig, grouped[3])
-
-		signedGroup := append(signedAToEscrowTxn, signedBToEscrowTxn...)
-		signedGroup = append(signedGroup, signedAppOptIn...)
-		signedGroup = append(signedGroup, signedEscrowToOracleEscrowTxn...)
-
-		txID, err := algodClient.SendRawTransaction(signedGroup).Do(context.Background())
-		if err != nil {
-			log.Error(err)
-			return
-		}
-		_, err = waitForTx(algodClient, txID)
-		if err != nil {
-			log.Error(err)
-			return
-		}
-		log.Infof("sent %s", txID)
+		//err := daemon.TestEnvironmentVariables()
+		//if err != nil {
+		//	log.Error(err)
+		//	return
+		//}
+		//algodClient, _, err := daemon.InitClients(daemon.AlgodAddress, daemon.AlgodToken, daemon.IndexerAddress, daemon.IndexerToken)
+		//if err != nil {
+		//	log.Error(err)
+		//	return
+		//}
+		//fundingAccount, err := generateAndFundFundingAccount()
+		//if err != nil {
+		//	log.Error(err)
+		//	return
+		//}
+		//suggestedParams, err := algodClient.SuggestedParams().Do(context.Background())
+		//if err != nil {
+		//	log.Error(err)
+		//	return
+		//}
+		//
+		//appCreator, A, B, err := generateAndFundAccounts(fundingAccount, algodClient, suggestedParams)
+		//if err != nil {
+		//	log.Error(err)
+		//	return
+		//}
+		//
+		//oraclePKAddress, oracleOwnerAddress, err := decodeOracleAddresses(oraclePKAddressString,
+		//	oracleOwnerAddressString)
+		//if err != nil {
+		//	log.Error(err)
+		//	return
+		//}
+		//
+		//appID, err := createGameApp(appCreator.PrivateKey, oraclePKAddress, oracleOwnerAddress, algodClient,
+		//	suggestedParams)
+		//if err != nil {
+		//	log.Error(err)
+		//	return
+		//}
+		//fmt.Printf("app id: %d\n", appID)
+		//
+		//randomCounter, randomCounterBytes, err := randomHex(8)
+		//if err != nil {
+		//	log.Error(err)
+		//	return
+		//}
+		//fmt.Printf("counter is: %s\n", randomCounter)
+		//
+		//addressA := A.Address
+		//addressB := B.Address
+		//escrowProgram, escrowSuffix, escrowAddress, err := generateGameEscrow(algodClient, addressA, addressB,
+		//	randomCounter)
+		//if err != nil {
+		//	log.Error(err)
+		//	return
+		//}
+		//res, err := pay(algodClient, fundingAccount, escrowAddress, 10000000, suggestedParams)
+		//if err != nil {
+		//	log.Error(err)
+		//	return
+		//}
+		//block := res.ConfirmedRound + 10
+		//fmt.Printf("block %d\n", block)
+		//oraclePKb32 := base32.StdEncoding.EncodeToString(oraclePKAddress[:])
+		//x := computeX(addressA, addressB, randomCounterBytes)
+		//oracleTealParams := compile.OracleTealParams{
+		//	AppIDHex:     fmt.Sprintf("0x%016x", appID),
+		//	Arg0:         "vrf",
+		//	Block:        fmt.Sprintf("%08d", block),
+		//	Xb32:         base32.StdEncoding.EncodeToString(x),
+		//	Sender:       escrowAddress,
+		//	SigningPKb32: oraclePKb32,
+		//	OwnerAddr:    oracleOwnerAddress,
+		//}
+		//oracleProgram, err := compile.CompileOracle(oracleTealParams, algodClient)
+		//if err != nil {
+		//	log.Error(err)
+		//	return
+		//}
+		//oracleEscrowAddress := crypto.AddressFromProgram(oracleProgram)
+		//
+		//_, err = pay(algodClient, fundingAccount, oracleEscrowAddress, 10000000, suggestedParams)
+		//if err != nil {
+		//	log.Error(err)
+		//	return
+		//}
+		//
+		//aToEscrowTxn, err := future.MakePaymentTxn(
+		//	addressA.String(),
+		//	escrowAddress.String(),
+		//	51000,
+		//	nil,
+		//	"",
+		//	suggestedParams,
+		//)
+		//if err != nil {
+		//	log.Error(err)
+		//	return
+		//}
+		//bToEscrowTxn, err := future.MakePaymentTxn(
+		//	addressB.String(),
+		//	escrowAddress.String(),
+		//	51000,
+		//	nil,
+		//	"",
+		//	suggestedParams,
+		//)
+		//if err != nil {
+		//	log.Error(err)
+		//	return
+		//}
+		//appArgs := [][]byte{
+		//	addressA[:],
+		//	addressB[:],
+		//	randomCounterBytes,
+		//	[]byte(fmt.Sprintf("%08d", block)),
+		//	{0},
+		//	escrowSuffix,
+		//
+		//}
+		//appOptIn, err := future.MakeApplicationOptInTx(
+		//	appID,
+		//	appArgs,
+		//	nil,
+		//	nil,
+		//	nil,
+		//	suggestedParams,
+		//	escrowAddress,
+		//	nil,
+		//	types.Digest{},
+		//	[32]byte{},
+		//	types.Address{},
+		//)
+		//note := []byte("vrf-v0")
+		//note = append(note, oraclePKAddress[:]...)
+		//note = append(note, oracleOwnerAddress[:]...)
+		//note = append(note, escrowAddress[:]...)
+		//note = append(note, []byte(fmt.Sprintf("%08d", block))...)
+		//note = append(note, x...)
+		//note = append(note, []byte(fmt.Sprintf("%08d", appID))...)
+		//note = append(note, []byte("vrf")...)
+		//
+		//escrowToOracleEscrowTxn, err := future.MakePaymentTxn(
+		//	escrowAddress.String(),
+		//	oracleEscrowAddress.String(),
+		//	50000,
+		//	note,
+		//	"",
+		//	suggestedParams,
+		//)
+		//
+		//grouped, err := transaction.AssignGroupID(
+		//	[]types.Transaction{aToEscrowTxn, bToEscrowTxn, appOptIn, escrowToOracleEscrowTxn}, "")
+		//
+		//_, signedAToEscrowTxn, err := crypto.SignTransaction(A.PrivateKey, grouped[0])
+		//if err != nil {
+		//	log.Error(err)
+		//	return
+		//}
+		//_, signedBToEscrowTxn, err := crypto.SignTransaction(B.PrivateKey, grouped[1])
+		//if err != nil {
+		//	log.Error(err)
+		//	return
+		//}
+		//escrowLogicSig, err := crypto.MakeLogicSig(escrowProgram, [][]byte{[]byte("query")}, nil, crypto.MultisigAccount{})
+		//_, signedAppOptIn, err := crypto.SignLogicsigTransaction(escrowLogicSig, grouped[2])
+		//_, signedEscrowToOracleEscrowTxn, err := crypto.SignLogicsigTransaction(escrowLogicSig, grouped[3])
+		//
+		//signedGroup := append(signedAToEscrowTxn, signedBToEscrowTxn...)
+		//signedGroup = append(signedGroup, signedAppOptIn...)
+		//signedGroup = append(signedGroup, signedEscrowToOracleEscrowTxn...)
+		//
+		//txID, err := algodClient.SendRawTransaction(signedGroup).Do(context.Background())
+		//if err != nil {
+		//	log.Error(err)
+		//	return
+		//}
+		//_, err = waitForTx(algodClient, txID)
+		//if err != nil {
+		//	log.Error(err)
+		//	return
+		//}
+		//log.Infof("sent %s", txID)
 	},
 }

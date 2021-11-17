@@ -1,0 +1,17 @@
+#pragma version 5
+txn Sender
+byte "request_round"
+app_local_get
+int 0
+!=
+bz main_l2
+byte "lost_funds"
+byte "lost_funds"
+app_global_get
+byte "service_fee"
+app_global_get
++
+app_global_put
+main_l2:
+int 1
+return

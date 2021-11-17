@@ -7,8 +7,8 @@ import (
 func init() {
 	TestCmd.AddCommand(queryPhaseCmd)
 	TestCmd.AddCommand(createAppCmd)
-	TestCmd.AddCommand(settlementPhaseCmd)
-	TestCmd.AddCommand(EndToEndCmd)
+	TestCmd.AddCommand(cancelCmd)
+	//TestCmd.AddCommand(EndToEndCmd)
 }
 
 var TestCmd = &cobra.Command{
