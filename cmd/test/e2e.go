@@ -314,7 +314,7 @@ var EndToEndCmd = &cobra.Command{
 		//	log.Error(err)
 		//	return
 		//}
-		//escrowLogicSig, err := crypto.MakeLogicSig(escrowProgram, [][]byte{[]byte("query")}, nil, crypto.MultisigAccount{})
+		//escrowLogicSig, err := crypto.MakeLogicSig(escrowProgram, [][]byte{[]byte("request")}, nil, crypto.MultisigAccount{})
 		//_, signedAppOptIn, err := crypto.SignLogicsigTransaction(escrowLogicSig, grouped[2])
 		//_, signedEscrowToOracleEscrowTxn, err := crypto.SignLogicsigTransaction(escrowLogicSig, grouped[3])
 		//

@@ -1,11 +1,28 @@
 # vrf-oracle
 
-## TODO
-- add command to run end-to-end test
-- migrate `pyteal` scripts from https://github.com/ori-shem-tov/rand-on-algo to this repo
-- compile TEAL scripts from binary templates instead of text templates
-- add cancellation phase
-- upgrade TEAL
+## Overview
+
+This project demonstrates a POC of a VRF oracle on Algorand's blockchain.
+
+Written in `Go` and `pyteal` (TEAL 5).
+
+It uses the same VRF implementation used by the `crypto` package in `go-algorand`.
+
+The `Go` component is monitoring the network for new `request` calls to the smart-contract, computes the VRF and sends a
+`respond` call to the smart-contract with the VRF output. It also looks for `cancel` calls and `closeout/clear` to
+remove their correspondent requests from the queue. Its code can be found under `cmd/daemon`.
+
+** Since this component was tested with Indexer version `2.6.4`, it also sends periodic zero amount transactions in
+order to refresh results from `/v2/transactions` endpoint.
+
+The smart-contract supports 4 commands:
+- **request** - Request for VRF computation. Expects in a transactions group with service fee payment transaction.
+- **respond** - Respond the VRF computation. Sent from an address used by the service, stored in global storage upon creation.
+- **cancel** - Cancel a request. Sent by the same address used to send the request. Can only be approved if the request round is in the future.
+- **withdraw_lost_funds** - If an address made a request and opt-out or cleared state before request the was handled, the service fee
+  paid is considered "lost". The owner account (stored in global storage upon creation) can withdraw those funds.
+
+`pyteal` code can be found in `pyteal/teal5.py`.
 
 ## Build
 
@@ -22,12 +39,15 @@ ln -s $GOPATH/go-aftools private/github.com/algorandfoundation/
 See https://cloud.google.com/appengine/docs/standard/go111/specifying-dependencies#final-go.mod-file for explanations of the reason why.
 
 ### Build libsodium from fork
+
 ```sh
 make build-libsodium
 ```
 
 ## Run
+
 ### Set environment variables
+
 Set `AF_ALGOD_ADDRESS` and `AF_ALGOD_TOKEN` to point to a valid `algod` client.
 
 Set `AF_IDX_ADDRESS` and `AF_IDX_TOKEN` to point to a valid `indexer` client.
@@ -36,62 +56,118 @@ Optionally set `VRF_LOG_LEVEL` to `DEBUG` or `INFO` (default is `WARN`).
 
 
 ### Supported arguments
+
 This service can take the following arguments:
 ```
-      --oracle-fee uint           the fee payed to the oracle for its service in MicroAlgos (optional) (default 1000)
-      --owner string              the oracle's owner address (required)
+      --app-id uint               application ID (required)
+      --dummy-app-id uint         dummy application ID for cost pooling (required)
       --round uint                the round to start scanning from (optional. default: current round)
+      --service-mnemonic string   25-word mnemonic of the service for writing the response (required)
       --signing-mnemonic string   25-word mnemonic of the oracle for signing (required)
       --vrf-mnemonic string       25-word mnemonic of the oracle for computing vrf (required)
 ```
 
+`dummy-app-id` should be the ID of an application which return 1 no matter what. It's used to pump-up the cost pool to allow calling `ed25519verify`.
+
+`service-mnemonic` account should be funded to cover transaction fees.
+
 ### Execute
+
 ```sh
 go run ./cmd run-daemon <ARGUMENTS>
 ```
 
 ## Test
+
 ### Prerequisites
+
 - Launch instances of Algorand's `node` and `indexer` and set environment variables
-- Run the VRF oracle daemon
+
+This code was tested with `Sandbox`.
+
+```sh
+./sandbox version
+
+algod version
+12884901889
+3.0.1.stable [rel/stable] (commit #b619b940)
+go-algorand is licensed with AGPLv3.0
+source code available at https://github.com/algorand/go-algorand
+
+Indexer version
+2.6.4 compiled at 2021-11-11T15:43:17+0000 from git hash 2d88932e2cf54fe62791502b646ffe7e60d4bfff (modified)
+
+Postgres version
+postgres (PostgreSQL) 13.4
+
+CouchDB version
+{"couchdb":"Welcome","version":"2.3.1","git_sha":"c298091a4","uuid":"a8f78b7f6460c9cf3ba4dff0fae7023f","features":["pluggable-storage-engines","scheduler"],"vendor":{"name":"The Apache Software Foundation"}}
+```
+
 ### Create and fund accounts
+
 In order to test, the following accounts should be created:
 ```
-APP_CREATOR - account for the coin toss game stateful app crator
-PLAYER_A - account for the 1st player participating in the coin toss game
-PLAYER_B - account for the 2nd player participating in the coin toss game
-ORACLE_OWNER - account for the oracle owner where the VRF fee is recieved
-ORACLE_PK - account for signing the VRF output by the oracle
+APP_CREATOR - account for the smart-contract app crator
+OWNER - account to receive the fees payed for using the VRF service
+VRF_SERVICE - account used by the VRF service to respond to requests
+REQUESTER - account to send requests to the VRF smart-contract
+SIGNING_ACCOUNT - account which responses are signed with its private-key
+VRF_COMP_ACCOUNT - account which VRF proofs are computed with its private-key
 ```
-In addition, `APP_CREATOR`, `PLAYER_A` and `PLAYER_B` should be funded to accommodate fees and remittances.
+`APP_CREATOR`, `OWNER`, `VRF_SERVICE` and `REQUESTER` should be funded to cover fees and reach minimum balance requirements.
 
-Later on, the game specific `ESCROW` and `ORACLE_ESCROW` accounts should be funded as well.
+### Create the smart-contract
 
-### Create the game stateful app
 ```sh
 go run ./cmd test create-app --app-creator-mnemonic <APP_CREATOR_MNEMONIC> \
---oracle-owner <ORACLE_OWNER> --oracle-pk <ORACLE_PK>
+--approval-program pyteal/vrf_oracle_approval.teal --clear-program pyteal/vrf_oracle_clear.teal --fee 500000 \
+--owner <OWNER> --vrf-service-addr <VRF_SERVICE> --signing-pk-addr <SIGNING_ACCOUNT> --should-create-dummy
+```
+This creates 2 smart-contracts: the service smart-contract and a dummy one.
+
+Both apps' IDs should be printed to the console and will be referred to as `APP_ID` and `DUMMY_APP_ID` in the next steps.
+
+
+### Start the service
+
+```sh
+export VRF_LOG_LEVEL=debug  # optional but recommended
+go run ./cmd run-daemon --signing-mnemonic <SIGNING_ACCOUNT_MNEMONIC> --vrf-mnemonic <VRF_COMP_ACCOUNT_MNEMONIC> \
+--service-mnemonic <VRF_SERVICE_MNEMONIC> --dummy-app-id <DUMMY_APP_ID> --app-id <APP_ID>
 ```
 
-The created app ID is printed to the console, and will be referred to as `APP_ID` in the next steps.
+### Opt-in the requester
 
-### Run the query phase
 ```sh
-go run ./cmd test query --address-a-mnemonic <PLAYER_A_MNEMONIC> \
---address-b-mnemonic <PLAYER_B_MNEMONIC> \
---app-id <APP_ID> --oracle-owner <ORACLE_OWNER> \
---oracle-pk <ORACLE_PK> --block <BLOCK_NUMBER>
+$(goal_cmd) app optin --from <REQUESTER> --app-id <APP_ID>
 ```
-`BLOCK_NUMBER` is the block number from which the oracle should take the block seed from for the VRF input. It must be a future block.
 
-The random game counter is printed to the console, and will be referred to as `COUNTER` in the next steps.
+### Send a request
 
-A request to fund the `ESCROW` and `ORACLE_ESCROW` accounts, is shown. This is required in order to meet the minimum balance constraint.
-After funding both accounts, press `ENTER` and the query phase transactions groups should be broadcast.
-
-### Run the settlement phase
-After the `BLOCK_NUMBER` is added to the blockchain, the oracle can compute the VRF and publish its answer, and the settlement phase can be executed:
 ```sh
-go run ./cmd test settlement --address-a <PLAYER_A> \
---address-b <PLAYER_B> --counter-hex-string <COUNTER> --app-id <APP_ID>
+go run ./cmd test request --app-id <APP_ID> --requester-mnemonic <REQUESTER_MNEMONIC> --block <BLOCK_NUMBER>
+```
+`BLOCK_NUMBER` is the block number from which the oracle should take the block seed from for the VRF input. It must be a future block (more than 10 rounds).
+
+Once the service reached and handled `BLOCK_NUMBER`, the VRF output should in `REQUESTER`'s local storage, and the service
+fee amount is transferred to `OWNER` account.
+
+If `BLOCK_NUMBER` is more than 5 rounds in the future, the request can be canceled:
+
+### Cancel a request
+
+```sh
+go run ./cmd test cancel --app-id <APP_ID> --requester-mnemonic <REQUESTER_MNEMONIC>
+```
+
+### Opt-out and clear state
+
+If the `REQUESTER` opt-out or cleared state before request was handled, the service fee
+he paid is considered "lost".
+
+The `OWNER` account can withdraw cumulated "lost" funds:
+
+```sh
+go run ./cmd test withdraw-lost-funds --app-id <APP_ID> --owner-mnemonic <OWNER_MNEMONIC>
 ```

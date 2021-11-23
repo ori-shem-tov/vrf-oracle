@@ -28,17 +28,17 @@ var (
 func init() {
 	daemon.SetLogger()
 
-	queryPhaseCmd.Flags().Uint64Var(&appID, "app-id", 0,
+	requestCmd.Flags().Uint64Var(&appID, "app-id", 0,
 		"Game app ID")
-	daemon.MarkFlagRequired(queryPhaseCmd.Flags(), "app-id")
+	daemon.MarkFlagRequired(requestCmd.Flags(), "app-id")
 
-	queryPhaseCmd.Flags().StringVar(&requesterMnemonic, "requester-mnemonic", "",
+	requestCmd.Flags().StringVar(&requesterMnemonic, "requester-mnemonic", "",
 		"25-word mnemonic of the requester")
-	daemon.MarkFlagRequired(queryPhaseCmd.Flags(), "requester-mnemonic")
+	daemon.MarkFlagRequired(requestCmd.Flags(), "requester-mnemonic")
 
-	queryPhaseCmd.Flags().Uint64Var(&block, "block", 0,
+	requestCmd.Flags().Uint64Var(&block, "block", 0,
 		"the block to take the seed for the VRF input")
-	daemon.MarkFlagRequired(queryPhaseCmd.Flags(), "block")
+	daemon.MarkFlagRequired(requestCmd.Flags(), "block")
 }
 
 func testRequestArguments() (ed25519.PrivateKey, types.Address, error) {
@@ -125,9 +125,9 @@ func generateRequestTxnGroup(requesterSK ed25519.PrivateKey, appEscrow types.Add
 	return signedGroup, nil
 }
 
-var queryPhaseCmd = &cobra.Command{
-	Use:   "query",
-	Short: "test query phase",
+var requestCmd = &cobra.Command{
+	Use:   "request",
+	Short: "test VRF request",
 	Run: func(cmd *cobra.Command, args []string) {
 		err := daemon.TestEnvironmentVariables()
 		if err != nil {

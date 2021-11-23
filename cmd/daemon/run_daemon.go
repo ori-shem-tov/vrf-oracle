@@ -84,7 +84,7 @@ func init() {
 	MarkFlagRequired(RunDaemonCmd.Flags(), "app-id")
 
 	RunDaemonCmd.Flags().Uint64Var(&dummyAppID, "dummy-app-id", 0,
-		"dummy application ID for fee pooling (required)")
+		"dummy application ID for cost pooling (required)")
 	MarkFlagRequired(RunDaemonCmd.Flags(), "dummy-app-id")
 
 	RunDaemonCmd.Flags().Uint64Var(&startingRound, "round", 0,
@@ -357,14 +357,43 @@ func validateTransaction(transaction models.Transaction, currentRound uint64) (m
 	return vrfRequest, nil
 }
 
+func removeRequestFromHeap(h *tools.VrfRequestsHeap, sender string) {
+	indexToRemove := -1
+	for i := range *h {
+		if (*h)[i].Sender.String() == sender {
+			indexToRemove = i
+			break
+		}
+	}
+	if indexToRemove != -1 {
+		removed := heap.Remove(h, indexToRemove).(models2.VrfRequest)
+		if removed.Sender.String() != sender {
+			// sanity
+			heap.Push(h, removed)
+			log.Fatalf("intended to remove request of %s but instead removed %s", sender, removed.Sender)
+		}
+		log.Debugf("removed request from %s of round %d from heap", removed.Sender, removed.BlockNumber)
+	}
+}
+
 func storeRequestsInHeap(h *tools.VrfRequestsHeap, transactions []models.Transaction, currentRound uint64) {
 	for _, txn := range transactions {
+		if txn.ApplicationTransaction.OnCompletion == "closeout" || txn.ApplicationTransaction.OnCompletion == "clear" {
+			// address cleared state, no need for VRF computation
+			removeRequestFromHeap(h, txn.Sender)
+			continue
+		}
 		if txn.ApplicationTransaction.OnCompletion != "noop" {
 			continue
 		}
 		if len(txn.ApplicationTransaction.ApplicationArgs) < 1 {
 			// should never happen. meaning there's an issue with the TEAL code
 			log.Warnf("found transaction with no arguments: %s", txn.Id)
+			continue
+		}
+		if string(txn.ApplicationTransaction.ApplicationArgs[0]) == "cancel" {
+			// address canceled request, no need for VRF computation
+			removeRequestFromHeap(h, txn.Sender)
 			continue
 		}
 		if string(txn.ApplicationTransaction.ApplicationArgs[0]) != "request" {

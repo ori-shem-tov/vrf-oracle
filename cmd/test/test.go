@@ -5,9 +5,10 @@ import (
 )
 
 func init() {
-	TestCmd.AddCommand(queryPhaseCmd)
+	TestCmd.AddCommand(requestCmd)
 	TestCmd.AddCommand(createAppCmd)
 	TestCmd.AddCommand(cancelCmd)
+	TestCmd.AddCommand(withdrawLostFundsCmd)
 	//TestCmd.AddCommand(EndToEndCmd)
 }
 
