@@ -73,10 +73,7 @@ def vrf_oracle_approval():
         App.localPut(Txn.accounts[1], Bytes('request_round'), Int(0)),
         #  storing the vrf output in local storage
         App.localPut(Txn.accounts[1], Bytes('response'), Txn.application_args[3]),
-        #  transfer the service fee to the owner address minus the transaction fee.
-        #  Note: we assume that the external service and the owner are coordinated.
-        #        In case they don't, the service could pump-up the txn fee thus reducing
-        #        the amount sent to the owner.
+        #  transfer the service fee to the owner address.
         InnerTxnBuilder.Begin(),
         InnerTxnBuilder.SetFields(
             {
@@ -104,7 +101,7 @@ def vrf_oracle_approval():
         ),
         #  resetting 'request_round' to allow more requests in the future
         App.localPut(Txn.sender(), Bytes('request_round'), Int(0)),
-        #  transfer the service fee to the requester address minus the transaction fee.
+        #  transfer the service fee to the requester address.
         InnerTxnBuilder.Begin(),
         InnerTxnBuilder.SetFields(
             {
