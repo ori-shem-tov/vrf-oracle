@@ -8,17 +8,20 @@ import (
 	"encoding/binary"
 	"fmt"
 	"io/ioutil"
-	"strings"
 	"time"
 
 	"github.com/algorand/go-algorand-sdk/client/v2/algod"
-	"github.com/algorand/go-algorand-sdk/client/v2/common/models"
 	"github.com/algorand/go-algorand-sdk/crypto"
 	"github.com/algorand/go-algorand-sdk/future"
 	"github.com/algorand/go-algorand-sdk/transaction"
 	"github.com/algorand/go-algorand-sdk/types"
 	libsodium_wrapper "github.com/ori-shem-tov/vrf-oracle/libsodium-wrapper"
 	log "github.com/sirupsen/logrus"
+)
+
+var (
+	numOfDummyTxns = 4
+	dummyAppBytes  = []byte{0x05, 0x81, 0x01} // pragma 5; pushint 1;
 )
 
 type VRFDaemon struct {
@@ -30,78 +33,28 @@ type VRFDaemon struct {
 
 	CurrentRound uint64 // The latest round we've sesen
 
-	SigningPrivateKey    ed25519.PrivateKey
-	VRFPrivateKey        ed25519.PrivateKey
-	AppCreatorPrivateKey ed25519.PrivateKey
-
+	Signer         crypto.Account
+	VRF            crypto.Account
+	AppCreator     crypto.Account
 	ServiceAccount crypto.Account
 }
 
-func (v *VRFDaemon) CreateApplication() error {
-	suggestedParams, err := v.AlgodClient.SuggestedParams().Do(context.Background())
-	if err != nil {
-		log.Fatalf("Failed to get suggested params from algod: %v", err)
-	}
-
+func (v *VRFDaemon) CreateApplications() error {
 	log.Info("creating dummy app...")
-	dummyAppID, err := createDummyApp(
-		[]byte{0x05, 0x20, 0x01, 0x01, 0x22}, v.AppCreatorPrivateKey, v.AlgodClient, suggestedParams,
-	)
+
+	dummyAppID, err := v.createDummyApp()
 	if err != nil {
-		log.Fatalf("Failed to create dummy app: %+v", err)
+		return fmt.Errorf("failed to create dummy app: %+v", err)
 	}
 	v.DummyAppID = dummyAppID
 
-	log.Info("Compiling teal")
-	approvalBytes, clearBytes, err := compileTeal(approvalProgramFilename, clearProgramFilename, v.AlgodClient)
+	log.Info("creating oracle app")
+
+	appIdx, err := v.createOracleApp()
 	if err != nil {
-		log.Fatalf("Failed to compile teal: %+v", err)
+		return fmt.Errorf("failed to create oracle app: %+v", err)
 	}
-	v.AppHashAddr = crypto.AddressFromProgram(approvalBytes)
-	log.Infof("Approval hash: %s", v.AppHashAddr)
-
-	block, err := getBlock(v.AlgodClient, v.CurrentRound)
-	if err != nil {
-		log.Fatalf("Failed to get block seed of block %d from algod", v.CurrentRound)
-	}
-
-	blockNumberBytes := make([]byte, 8)
-	binary.BigEndian.PutUint64(blockNumberBytes, startingRound)
-	signedVrfOutput, vrfOutput, err := computeAndSignVrf(
-		blockNumberBytes, block.BlockHeader.Seed[:], v.AppHashAddr, v.SigningPrivateKey, v.VRFPrivateKey,
-	)
-
-	if err != nil {
-		log.Fatalf("Failed to compute vrf for %d: %v", v.CurrentRound, err)
-	}
-
-	globalStateSchema := types.StateSchema{NumUint: 0, NumByteSlice: 64}
-	localStateSchema := types.StateSchema{NumUint: 0, NumByteSlice: 0}
-
-	appArgs := [][]byte{
-		blockNumberBytes, v.SigningPrivateKey[32:], v.VRFPrivateKey[32:],
-		block.BlockHeader.Seed[:], vrfOutput, signedVrfOutput[:],
-	}
-
-	stxBytes, err := generateSignedAppCreate(
-		approvalBytes, clearBytes, globalStateSchema, localStateSchema,
-		v.AppCreatorPrivateKey, appArgs, suggestedParams, dummyAppID,
-	)
-	if err != nil {
-		log.Fatalf("Failed to make app create transaction")
-	}
-
-	txID, err := v.AlgodClient.SendRawTransaction(stxBytes).Do(context.Background())
-	if err != nil {
-		log.Fatalf("Failed sending app create transaction: %v", err)
-	}
-
-	res, err := future.WaitForConfirmation(v.AlgodClient, txID, 2, context.Background())
-	if err != nil {
-		log.Fatalf("Failed while waiting for app create to be confirmed: %+v", err)
-	}
-
-	v.AppID = res.ApplicationIndex
+	v.AppID = appIdx
 
 	return nil
 }
@@ -150,9 +103,7 @@ func (v *VRFDaemon) HandleBlock(block types.Block) error {
 
 	blockSeed := block.BlockHeader.Seed[:]
 
-	signedVrfOutput, vrfOutput, err := computeAndSignVrf(
-		blockNumberBytes, blockSeed, v.AppHashAddr, v.SigningPrivateKey, v.VRFPrivateKey,
-	)
+	signedVrfOutput, vrfOutput, err := v.ComputeAndSignVRFForRound(block)
 	if err != nil {
 		return fmt.Errorf("failed to compute and sign vrf: %+v", err)
 	}
@@ -162,52 +113,29 @@ func (v *VRFDaemon) HandleBlock(block types.Block) error {
 		return fmt.Errorf("failed to get suggested params: %+v", err)
 	}
 
-	stxBytes, err := buildAnswerPhaseTransactionsGroup(
-		v.AppID, v.DummyAppID, v.ServiceAccount, blockNumberBytes, blockSeed, vrfOutput, signedVrfOutput, sp,
-	)
-	if err != nil {
-		return fmt.Errorf("failed building transactions group for %d: %v", block.Round, err)
-	}
-
-	txid, err := v.AlgodClient.SendRawTransaction(stxBytes).Do(context.Background())
-	if err != nil {
-		return fmt.Errorf("failed sending transactions group for %v: %v", block.Round, err)
-	}
-
-	log.Infof("Sent request txn: %s", txid)
-
-	return nil
-}
-
-// generates a group of 3 application calls:
-// the 1st App call is to the smart-contract to respond the VRF output, while the 2nd and 3rd are dummy app calls used
-// to increase the cost pool.
-func buildAnswerPhaseTransactionsGroup(appID, dummyAppID uint64, serviceAccount crypto.Account, blockNumber,
-	blockSeed, vrfOutput []byte, signedVrfOutput types.Signature, sp types.SuggestedParams) ([]byte, error) {
-
+	// generates a group of N application calls:
+	// the 1st App call is to the smart-contract to respond the VRF output, while the rest are
+	// dummy app calls used to increase the budget
 	appArgs := [][]byte{
-		[]byte("respond"), blockNumber, blockSeed, vrfOutput, signedVrfOutput[:],
+		[]byte("respond"), blockNumberBytes, blockSeed, vrfOutput, signedVrfOutput[:],
 	}
 
 	appCall, err := future.MakeApplicationNoOpTx(
-		appID, appArgs, nil, nil, nil, sp, serviceAccount.Address, nil, types.Digest{}, [32]byte{}, types.Address{},
+		v.AppID, appArgs, nil, nil, nil, sp, v.ServiceAccount.Address, nil, types.Digest{}, [32]byte{}, types.Address{},
 	)
-
 	if err != nil {
-		return nil, fmt.Errorf("failed creating app call: %v", err)
+		return fmt.Errorf("failed creating app call: %v", err)
 	}
-	numOfDummyTxns := 4
-	appCall.Fee *= types.MicroAlgos(1 + numOfDummyTxns)
 
+	appCall.Fee *= types.MicroAlgos(1 + numOfDummyTxns)
 	appCalls := []types.Transaction{appCall}
 	for i := 0; i < numOfDummyTxns; i++ {
 		dummyAppCall, err := future.MakeApplicationNoOpTx(
-			dummyAppID, nil, nil, nil, nil, sp, serviceAccount.Address,
+			v.DummyAppID, nil, nil, nil, nil, sp, v.ServiceAccount.Address,
 			[]byte{byte(i)}, types.Digest{}, [32]byte{}, types.ZeroAddress,
 		)
-
 		if err != nil {
-			return nil, fmt.Errorf("failed creating dummy app call: %v", err)
+			return fmt.Errorf("failed creating dummy app call: %v", err)
 		}
 
 		dummyAppCall.Fee = 0
@@ -217,35 +145,36 @@ func buildAnswerPhaseTransactionsGroup(appID, dummyAppID uint64, serviceAccount 
 
 	grouped, err := transaction.AssignGroupID(appCalls, "")
 	if err != nil {
-		return nil, fmt.Errorf("failed grouping transactions: %v", err)
+		return fmt.Errorf("failed grouping transactions: %v", err)
 	}
 
 	var signedGroup []byte
 	for _, txn := range grouped {
-		_, signed, err := crypto.SignTransaction(serviceAccount.PrivateKey, txn)
+		_, signed, err := crypto.SignTransaction(v.ServiceAccount.PrivateKey, txn)
 		if err != nil {
-			return nil, fmt.Errorf("failed signing app call: %v", err)
+			return fmt.Errorf("failed signing app call: %v", err)
 		}
 		signedGroup = append(signedGroup, signed...)
 	}
 
-	return signedGroup, nil
-}
+	txid, err := v.AlgodClient.SendRawTransaction(signedGroup).Do(context.Background())
+	if err != nil {
+		return fmt.Errorf("failed sending transactions group for %v: %v", block.Round, err)
+	}
 
-func getVrfPrivateKey(key ed25519.PrivateKey) libsodium_wrapper.VrfPrivkey {
-	var vrfPrivateKey libsodium_wrapper.VrfPrivkey
-	copy(vrfPrivateKey[:], key)
-	return vrfPrivateKey
+	log.Infof("Sent request txn: %s", txid)
+
+	return nil
 }
 
 // compute the VRF output and sign the concatenation of the input with the output (to be verified by the smart contract)
-func computeAndSignVrf(blockNumber, blockSeed []byte, appApprovalHashAddress types.Address, oracleSigningKey,
-	oracleVrfKey ed25519.PrivateKey) (types.Signature, []byte, error) {
+func (v *VRFDaemon) ComputeAndSignVRFForRound(block types.Block) (types.Signature, []byte, error) {
 
-	vrfInput := sha512.Sum512_256(append(blockNumber, blockSeed...))
+	blockNumberBytes := make([]byte, 8)
+	binary.BigEndian.PutUint64(blockNumberBytes, uint64(block.Round))
+	vrfInput := sha512.Sum512_256(append(blockNumberBytes, block.BlockHeader.Seed[:]...))
 
-	vrfPrivateKey := getVrfPrivateKey(oracleVrfKey)
-	proof, ok := vrfPrivateKey.ProveBytes(vrfInput[:])
+	proof, ok := getVrfPrivateKey(v.VRF.PrivateKey).ProveBytes(vrfInput[:])
 	if !ok {
 		return types.Signature{}, []byte{}, fmt.Errorf("error computing vrf proof")
 	}
@@ -255,8 +184,8 @@ func computeAndSignVrf(blockNumber, blockSeed []byte, appApprovalHashAddress typ
 		return types.Signature{}, []byte{}, fmt.Errorf("error computing vrf output")
 	}
 
-	toSign := append(append(blockNumber, blockSeed...), vrfOutput[:]...)
-	sig, err := crypto.TealSign(oracleSigningKey, toSign, appApprovalHashAddress)
+	toSign := append(append(blockNumberBytes, block.BlockHeader.Seed[:]...), vrfOutput[:]...)
+	sig, err := crypto.TealSign(v.VRF.PrivateKey, toSign, v.AppHashAddr)
 	if err != nil {
 		return types.Signature{}, []byte{}, fmt.Errorf("error signing vrf output")
 	}
@@ -264,94 +193,116 @@ func computeAndSignVrf(blockNumber, blockSeed []byte, appApprovalHashAddress typ
 	return sig, vrfOutput[:], nil
 }
 
-func getBlock(a *algod.Client, round uint64) (types.Block, error) {
-	block, err := a.Block(round).Do(context.Background())
-	return block, err
-}
-
-func generateSignedAppCreate(approvalBytes, clearBytes []byte, globalState, localState types.StateSchema,
-	appCreatorSK ed25519.PrivateKey, args [][]byte, sp types.SuggestedParams, dummyAppID uint64) ([]byte, error) {
-
-	sender, err := crypto.GenerateAddressFromSK(appCreatorSK)
+// createOracleApp creates the application that validates the input and provides an interface
+// to retrieve the randomness results
+func (v *VRFDaemon) createOracleApp() (uint64, error) {
+	sp, err := v.AlgodClient.SuggestedParams().Do(context.Background())
 	if err != nil {
-		return nil, err
+		return 0, fmt.Errorf("failed to get suggested params: %+v", err)
+	}
+
+	approvalBytes, clearBytes, err := compileTeal(v.AlgodClient, approvalProgramFilename, clearProgramFilename)
+	if err != nil {
+		return 0, fmt.Errorf("failed to compile teal: %+v", err)
+	}
+	v.AppHashAddr = crypto.AddressFromProgram(approvalBytes)
+
+	block, err := getBlock(v.AlgodClient, v.CurrentRound)
+	if err != nil {
+		return 0, fmt.Errorf("failed to get block seed of block %d from algod", v.CurrentRound)
+	}
+
+	signedVrfOutput, vrfOutput, err := v.ComputeAndSignVRFForRound(block)
+	if err != nil {
+		return 0, fmt.Errorf("failed to compute vrf for %d: %v", v.CurrentRound, err)
+	}
+
+	globalStateSchema := types.StateSchema{NumUint: 0, NumByteSlice: 64}
+	localStateSchema := types.StateSchema{NumUint: 0, NumByteSlice: 0}
+
+	blockNumberBytes := make([]byte, 8)
+	binary.BigEndian.PutUint64(blockNumberBytes, v.CurrentRound)
+	args := [][]byte{
+		blockNumberBytes, v.Signer.PrivateKey[32:], v.VRF.PrivateKey[32:],
+		block.BlockHeader.Seed[:], vrfOutput, signedVrfOutput[:],
 	}
 
 	appCall, err := future.MakeApplicationCreateTx(
-		false, approvalBytes, clearBytes, globalState, localState, args,
-		nil, nil, nil, sp, sender, nil, types.Digest{}, [32]byte{}, types.ZeroAddress,
+		false, approvalBytes, clearBytes, globalStateSchema, localStateSchema, args,
+		nil, nil, nil, sp, v.AppCreator.Address, nil, types.Digest{}, [32]byte{}, types.ZeroAddress,
 	)
-
 	if err != nil {
-		return nil, err
+		return 0, fmt.Errorf("failed to make app create txn: %+v", err)
 	}
 
 	appCalls := []types.Transaction{appCall}
 	for i := 0; i < 4; i++ {
 		dummyAppCall, err := future.MakeApplicationNoOpTx(
-			dummyAppID, nil, nil, nil, nil, sp, sender,
+			v.DummyAppID, nil, nil, nil, nil, sp, v.AppCreator.Address,
 			[]byte{byte(i)}, types.Digest{}, [32]byte{}, types.ZeroAddress,
 		)
 		if err != nil {
-			return nil, fmt.Errorf("failed creating dummy app call: %v", err)
+			return 0, fmt.Errorf("failed creating dummy app call: %v", err)
 		}
 		appCalls = append(appCalls, dummyAppCall)
 	}
 
 	grouped, err := transaction.AssignGroupID(appCalls, "")
 	if err != nil {
-		return nil, fmt.Errorf("failed grouping transactions: %v", err)
+		return 0, fmt.Errorf("failed grouping transactions: %v", err)
 	}
 
 	var signedGroup []byte
 	for _, txn := range grouped {
-		_, signed, err := crypto.SignTransaction(appCreatorSK, txn)
+		_, signed, err := crypto.SignTransaction(v.AppCreator.PrivateKey, txn)
 		if err != nil {
-			return nil, fmt.Errorf("failed signing app call: %v", err)
+			return 0, fmt.Errorf("failed signing app call: %v", err)
 		}
 		signedGroup = append(signedGroup, signed...)
 	}
 
-	return signedGroup, nil
+	txID, err := v.AlgodClient.SendRawTransaction(signedGroup).Do(context.Background())
+	if err != nil {
+		return 0, fmt.Errorf("failed sending app create transaction: %v", err)
+	}
+
+	res, err := future.WaitForConfirmation(v.AlgodClient, txID, 2, context.Background())
+	if err != nil {
+		return 0, fmt.Errorf("failed while waiting for app create to be confirmed: %+v", err)
+	}
+
+	return res.ApplicationIndex, nil
 }
 
-func generateSignedDummyAppCreate(approvalBytes, clearBytes []byte, globalState, localState types.StateSchema,
-	appCreatorSK ed25519.PrivateKey, args [][]byte, sp types.SuggestedParams) ([]byte, error) {
-	sender, err := crypto.GenerateAddressFromSK(appCreatorSK)
+// createDummyApp creates an application whose sole purpose is to allow us to increase
+// our opcode budget by making multiple grouped application call transactions
+func (v *VRFDaemon) createDummyApp() (uint64, error) {
+	sp, err := v.AlgodClient.SuggestedParams().Do(context.Background())
 	if err != nil {
-		return nil, err
+		return 0, fmt.Errorf("failed to get suggested params: %+v", err)
 	}
+
+	schema := types.StateSchema{}
 	tx, err := future.MakeApplicationCreateTx(
-		false, approvalBytes, clearBytes, globalState, localState, args,
-		nil, nil, nil, sp, sender, nil, types.Digest{}, [32]byte{}, types.ZeroAddress,
-	)
-	if err != nil {
-		return nil, err
-	}
-
-	_, stxBytes, err := crypto.SignTransaction(appCreatorSK, tx)
-	if err != nil {
-		return nil, err
-	}
-	return stxBytes, nil
-}
-
-func createDummyApp(approvalProgram []byte, appCreatorSK ed25519.PrivateKey, algodClient *algod.Client,
-	suggestedParams types.SuggestedParams) (uint64, error) {
-
-	stxBytes, err := generateSignedDummyAppCreate(
-		approvalProgram, approvalProgram, types.StateSchema{}, types.StateSchema{}, appCreatorSK, nil, suggestedParams,
+		false, dummyAppBytes, dummyAppBytes, schema, schema,
+		nil, nil, nil, nil, sp, v.AppCreator.Address, nil,
+		types.Digest{}, [32]byte{}, types.ZeroAddress,
 	)
 	if err != nil {
 		return 0, err
 	}
 
-	txID, err := algodClient.SendRawTransaction(stxBytes).Do(context.Background())
+	_, stxBytes, err := crypto.SignTransaction(v.AppCreator.PrivateKey, tx)
+	if err != nil {
+		return 0, err
+	}
+
+	txID, err := v.AlgodClient.SendRawTransaction(stxBytes).Do(context.Background())
 	if err != nil {
 		return 0, fmt.Errorf("failed sending app call: %v", err)
 	}
 
-	res, err := future.WaitForConfirmation(algodClient, txID, 2, context.Background())
+	res, err := future.WaitForConfirmation(v.AlgodClient, txID, 2, context.Background())
 	if err != nil {
 		return 0, err
 	}
@@ -359,7 +310,7 @@ func createDummyApp(approvalProgram []byte, appCreatorSK ed25519.PrivateKey, alg
 	return res.ApplicationIndex, nil
 }
 
-func compileTeal(approvalProgramFilename, clearProgramFilename string, algodClient *algod.Client) ([]byte, []byte, error) {
+func compileTeal(algodClient *algod.Client, approvalProgramFilename, clearProgramFilename string) ([]byte, []byte, error) {
 	approval, err := ioutil.ReadFile(approvalProgramFilename)
 	if err != nil {
 		return nil, nil, err
@@ -389,39 +340,26 @@ func compileTeal(approvalProgramFilename, clearProgramFilename string, algodClie
 	return compiledApprovalBytes, compiledClearBytes, nil
 }
 
-func getStartingRound(inputRound uint64, algodClient *algod.Client) (uint64, error) {
-	var result uint64
+func getStartingRound(algodClient *algod.Client, inputRound uint64) (uint64, error) {
 	if inputRound != 0 {
-		result = inputRound
-	} else {
-		status, err := algodClient.Status().Do(context.Background())
-		if err != nil {
-			return 0, fmt.Errorf("failed getting status from algod: %v", err)
-		}
-		result = status.LastRound
+		return inputRound, nil
 	}
-	return result, nil
+
+	status, err := algodClient.Status().Do(context.Background())
+	if err != nil {
+		return 0, fmt.Errorf("failed getting status from algod: %v", err)
+	}
+
+	return status.LastRound, nil
 }
 
-func GetFromState(key []byte, state []models.TealKeyValue) (models.TealValue, bool) {
-	kB64 := base64.StdEncoding.EncodeToString(key)
-	for _, kv := range state {
-		if kv.Key == kB64 {
-			return kv.Value, true
-		}
-	}
-	return models.TealValue{}, false
+func getBlock(a *algod.Client, round uint64) (types.Block, error) {
+	block, err := a.Block(round).Do(context.Background())
+	return block, err
 }
 
-func InitClients(algodAddress, algodToken string) (*algod.Client, error) {
-	algodClient, err := algod.MakeClient(algodAddress, algodToken)
-	return algodClient, err
-}
-
-func TestEnvironmentVariables() error {
-	var missing []string
-	if AlgodAddress == "" {
-		return fmt.Errorf("missing %s environment variable(s)", strings.Join(missing, ","))
-	}
-	return nil
+func getVrfPrivateKey(key ed25519.PrivateKey) libsodium_wrapper.VrfPrivkey {
+	var vrfPrivateKey libsodium_wrapper.VrfPrivkey
+	copy(vrfPrivateKey[:], key)
+	return vrfPrivateKey
 }

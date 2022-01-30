@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
+	"encoding/base64"
 	"encoding/binary"
 	"encoding/hex"
 	"fmt"
@@ -11,6 +12,7 @@ import (
 	"os"
 	"strings"
 
+	"github.com/algorand/go-algorand-sdk/client/v2/common/models"
 	"github.com/algorand/go-algorand-sdk/crypto"
 	"github.com/algorand/go-algorand-sdk/future"
 	"github.com/algorand/go-algorand-sdk/mnemonic"
@@ -173,7 +175,7 @@ var requestCmd = &cobra.Command{
 			return
 		}
 
-		feeStateValue, ok := daemon.GetFromState([]byte("service_fee"), appObject.Params.GlobalState)
+		feeStateValue, ok := GetFromState([]byte("service_fee"), appObject.Params.GlobalState)
 		if !ok {
 			log.Errorf("app %d doesn't have \"service_fee\" key", appID)
 			return
@@ -231,4 +233,14 @@ var requestCmd = &cobra.Command{
 		//log.Infof("sent %s", txID)
 
 	},
+}
+
+func GetFromState(key []byte, state []models.TealKeyValue) (models.TealValue, bool) {
+	kB64 := base64.StdEncoding.EncodeToString(key)
+	for _, kv := range state {
+		if kv.Key == kB64 {
+			return kv.Value, true
+		}
+	}
+	return models.TealValue{}, false
 }

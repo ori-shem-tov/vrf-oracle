@@ -1,9 +1,11 @@
 package daemon
 
 import (
+	"fmt"
 	"os"
 	"strings"
 
+	"github.com/algorand/go-algorand-sdk/client/v2/algod"
 	"github.com/algorand/go-algorand-sdk/crypto"
 
 	log "github.com/sirupsen/logrus"
@@ -78,77 +80,89 @@ func init() {
 	MarkFlagRequired(RunDaemonCmd.Flags(), "clear-program")
 }
 
+func InitClients(algodAddress, algodToken string) (*algod.Client, error) {
+	algodClient, err := algod.MakeClient(algodAddress, algodToken)
+	return algodClient, err
+}
+
+func TestEnvironmentVariables() error {
+	var missing []string
+	if AlgodAddress == "" {
+		return fmt.Errorf("missing %s environment variable(s)", strings.Join(missing, ","))
+	}
+	return nil
+}
+
+func AccountFromMnemonic(mn string) (crypto.Account, error) {
+	acct := crypto.Account{}
+
+	pk, err := mnemonic.ToPrivateKey(mn)
+	if err != nil {
+		return acct, err
+	}
+
+	addr, err := crypto.GenerateAddressFromSK(pk)
+	if err != nil {
+		return acct, err
+	}
+
+	return crypto.Account{
+		PrivateKey: pk,
+		Address:    addr,
+	}, nil
+}
+
 var RunDaemonCmd = &cobra.Command{
 	Use:   "run-daemon",
 	Short: "runs the daemon",
 	Run: func(cmd *cobra.Command, args []string) {
-		err := TestEnvironmentVariables()
-		if err != nil {
-			log.Error(err)
-			return
-		}
-
 		vrfd := VRFDaemon{}
+
+		if err := TestEnvironmentVariables(); err != nil {
+			log.Fatalf("error testing environment variables: %+v", err)
+		}
 
 		algodClient, err := InitClients(AlgodAddress, AlgodToken)
 		if err != nil {
-			log.Errorf("failed to initialize clients: %+v", err)
-			return
+			log.Fatalf("failed to initialize clients: %+v", err)
 		}
 		vrfd.AlgodClient = algodClient
 
-		startingRound, err = getStartingRound(startingRound, algodClient)
+		signerAcct, err := AccountFromMnemonic(signingMnemonicString)
 		if err != nil {
-			log.Errorf("failed to get starting round: %+v", err)
-			return
+			log.Fatalf("invalid signing mnemonic: %v", err)
 		}
-		vrfd.CurrentRound = (startingRound / writeBlockInterval) * writeBlockInterval
+		vrfd.Signer = signerAcct
 
-		signingPrivateKey, err := mnemonic.ToPrivateKey(signingMnemonicString)
-		if err != nil {
-			log.Errorf("invalid signing mnemonic: %v", err)
-			return
-		}
-
-		vrfd.SigningPrivateKey = signingPrivateKey
-
-		vrfPrivateKey, err := mnemonic.ToPrivateKey(vrfMnemonicString)
+		vrfAcct, err := AccountFromMnemonic(vrfMnemonicString)
 		if err != nil {
 			log.Errorf("invalid vrf mnemonic: %v", err)
 			return
 		}
-		vrfd.VRFPrivateKey = vrfPrivateKey
+		vrfd.VRF = vrfAcct
 
-		appCreatorPrivateKey, err := mnemonic.ToPrivateKey(appCreatorMnemonic)
+		appAcct, err := AccountFromMnemonic(appCreatorMnemonic)
 		if err != nil {
-			log.Errorf("invalid app creator mnemonic: %v", err)
-			return
+			log.Fatalf("invalid app creator mnemonic: %v", err)
 		}
-		vrfd.AppCreatorPrivateKey = appCreatorPrivateKey
+		vrfd.AppCreator = appAcct
 
-		servicePrivateKey, err := mnemonic.ToPrivateKey(serviceMnemonicString)
+		sa, err := AccountFromMnemonic(serviceMnemonicString)
 		if err != nil {
-			log.Errorf("invalid service mnemonic: %v", err)
-			return
+			log.Fatalf("Failed to create service account from mnemonic: %v", err)
 		}
+		vrfd.ServiceAccount = sa
 
-		serviceAddress, err := crypto.GenerateAddressFromSK(servicePrivateKey)
+		startingRound, err = getStartingRound(algodClient, startingRound)
 		if err != nil {
-			log.Errorf("invalid service key: %+v", err)
-			return
+			log.Fatalf("failed to get starting round: %+v", err)
 		}
+		vrfd.CurrentRound = (startingRound / writeBlockInterval) * writeBlockInterval
 
-		vrfd.ServiceAccount = crypto.Account{
-			PrivateKey: servicePrivateKey,
-			Address:    serviceAddress,
-		}
-
-		vrfd.CreateApplication()
-
-		startingRound += writeBlockInterval
+		log.Infof("creating applications...")
+		vrfd.CreateApplications()
 
 		log.Info("running...")
-
 		vrfd.Start()
 	},
 }
