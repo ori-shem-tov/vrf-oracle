@@ -26,19 +26,15 @@ The smart-contract supports 4 commands:
 
 ## Build
 
-###  Linking go-aftools
-
-You need to link the private repo `go-aftools` in the correct place in `private/`.
-Be sure to have `go-aftools` up-to-date
-
-Concretely, if `$GOPATH` contains a single path:
-```
-ln -s $GOPATH/go-aftools private/github.com/algorandfoundation/
-```
-
-See https://cloud.google.com/appengine/docs/standard/go111/specifying-dependencies#final-go.mod-file for explanations of the reason why.
+The libsodium submodule must be cloned down and built locally.
 
 ### Build libsodium from fork
+
+Initialize the libsodium submodule
+
+```sh
+git submodule update --init --recursive
+```
 
 ```sh
 make build-libsodium

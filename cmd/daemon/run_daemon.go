@@ -34,15 +34,15 @@ var (
 	appCreatorMnemonic      string
 	approvalProgramFilename string
 	clearProgramFilename    string
-	signingMnemonicString     string // the mnemonic for signing vrf responses
-	vrfMnemonicString         string // the mnemonic for generating the vrf
-	serviceMnemonicString     string // the mnemonic for the service account (used to send responses to the smart-contract)
-	startingRound             uint64  // the round from which the daemon starts scanning
-	AlgodAddress              = os.Getenv("AF_ALGOD_ADDRESS")
-	AlgodToken                = os.Getenv("AF_ALGOD_TOKEN")
-	IndexerAddress            = os.Getenv("AF_IDX_ADDRESS")
-	IndexerToken              = os.Getenv("AF_IDX_TOKEN")
-	logLevelEnv               = strings.ToLower(os.Getenv("VRF_LOG_LEVEL"))
+	signingMnemonicString   string // the mnemonic for signing vrf responses
+	vrfMnemonicString       string // the mnemonic for generating the vrf
+	serviceMnemonicString   string // the mnemonic for the service account (used to send responses to the smart-contract)
+	startingRound           uint64 // the round from which the daemon starts scanning
+	AlgodAddress            = os.Getenv("AF_ALGOD_ADDRESS")
+	AlgodToken              = os.Getenv("AF_ALGOD_TOKEN")
+	IndexerAddress          = os.Getenv("AF_IDX_ADDRESS")
+	IndexerToken            = os.Getenv("AF_IDX_TOKEN")
+	logLevelEnv             = strings.ToLower(os.Getenv("VRF_LOG_LEVEL"))
 )
 
 const (
@@ -118,18 +118,9 @@ func buildAnswerPhaseTransactionsGroup(appID, dummyAppID uint64, serviceAccount 
 		signedVrfOutput[:],
 	}
 	appCall, err := future.MakeApplicationNoOpTx(
-		appID,
-		appArgs,
-		nil,
-		nil,
-		nil,
-		sp,
-		serviceAccount.Address,
-		nil,
-		types.Digest{},
-		[32]byte{},
-		types.Address{},
+		appID, appArgs, nil, nil, nil, sp, serviceAccount.Address, nil, types.Digest{}, [32]byte{}, types.Address{},
 	)
+
 	if err != nil {
 		return nil, fmt.Errorf("failed creating app call: %v", err)
 	}
@@ -138,17 +129,7 @@ func buildAnswerPhaseTransactionsGroup(appID, dummyAppID uint64, serviceAccount 
 	appCalls := []types.Transaction{appCall}
 	for i := 0; i < numOfDummyTxns; i++ {
 		dummyAppCall, err := future.MakeApplicationNoOpTx(
-			dummyAppID,
-			nil,
-			nil,
-			nil,
-			nil,
-			sp,
-			serviceAccount.Address,
-			[]byte{byte(i)},
-			types.Digest{},
-			[32]byte{},
-			types.ZeroAddress,
+			dummyAppID, nil, nil, nil, nil, sp, serviceAccount.Address, []byte{byte(i)}, types.Digest{}, [32]byte{}, types.ZeroAddress,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("failed creating dummy app call: %v", err)
@@ -161,6 +142,7 @@ func buildAnswerPhaseTransactionsGroup(appID, dummyAppID uint64, serviceAccount 
 	if err != nil {
 		return nil, fmt.Errorf("failed grouping transactions: %v", err)
 	}
+
 	var signedGroup []byte
 	for _, txn := range grouped {
 		_, signed, err := crypto.SignTransaction(serviceAccount.PrivateKey, txn)
@@ -180,7 +162,7 @@ func getVrfPrivateKey(key ed25519.PrivateKey) libsodium_wrapper.VrfPrivkey {
 }
 
 // concat the block number with the block seed and the user seed and hash to create the input to the VRF
-func buildVrfInput(blockNumber, blockSeed  []byte) [sha512.Size256]byte {
+func buildVrfInput(blockNumber, blockSeed []byte) [sha512.Size256]byte {
 	toHash := append(blockNumber, blockSeed...)
 	return sha512.Sum512_256(toHash)
 }
@@ -211,27 +193,18 @@ func computeAndSignVrf(blockNumber, blockSeed []byte, appApprovalHashAddress typ
 func handleRequestsForCurrentRound(requestsToHandle []models2.VrfRequest, blockSeed []byte, signingPrivateKey,
 	vrfPrivateKey ed25519.PrivateKey, serviceAccount crypto.Account, appApprovalHashAddr types.Address,
 	suggestedParams types.SuggestedParams, appID, dummyAppID uint64, algodClient *algod.Client) {
+
 	for _, currentRequestHandled := range requestsToHandle {
 		signedVrfOutput, vrfOutput, err := computeAndSignVrf(
-			currentRequestHandled.BlockNumberBytes,
-			blockSeed,
-			appApprovalHashAddr,
-			signingPrivateKey,
-			vrfPrivateKey,
+			currentRequestHandled.BlockNumberBytes, blockSeed, appApprovalHashAddr, signingPrivateKey, vrfPrivateKey,
 		)
 		if err != nil {
 			log.Warnf("failed computing vrf for %v: %v. skipping...", currentRequestHandled, err)
 			continue
 		}
+
 		stxBytes, err := buildAnswerPhaseTransactionsGroup(
-			appID,
-			dummyAppID,
-			serviceAccount,
-			currentRequestHandled,
-			blockSeed,
-			vrfOutput,
-			signedVrfOutput,
-			suggestedParams,
+			appID, dummyAppID, serviceAccount, currentRequestHandled, blockSeed, vrfOutput, signedVrfOutput, suggestedParams,
 		)
 		if err != nil {
 			log.Warnf(
@@ -241,16 +214,16 @@ func handleRequestsForCurrentRound(requestsToHandle []models2.VrfRequest, blockS
 			)
 			continue
 		}
+
 		txId, err := algodClient.SendRawTransaction(stxBytes).Do(context.Background())
 		if err != nil {
 			log.Warnf(
-				"failed sending transactions group for %v: %v. skipping...",
-				currentRequestHandled,
-				err,
+				"failed sending transactions group for %v: %v. skipping...", currentRequestHandled, err,
 			)
 			log.Debugf("stxbytes bas64: %v", base64.StdEncoding.EncodeToString(stxBytes))
 			continue
 		}
+
 		log.Infof("Sent transaction %s", txId)
 	}
 }
@@ -290,7 +263,7 @@ func getBlock(indexerClient *indexer.Client, round uint64) (models.Block, error)
 // extracts the VRF requests from the heap to handle in the current round
 func getVrfRequestsToHandle(h *tools.VrfRequestsHeap, currentRound uint64) []models2.VrfRequest {
 	var result []models2.VrfRequest
-	for{
+	for {
 		if len(*h) < 1 {
 			break
 		}
@@ -364,7 +337,7 @@ func removeRequestFromHeap(h *tools.VrfRequestsHeap, sender string) {
 }
 
 func storeRequestsInHeap(h *tools.VrfRequestsHeap, currentRound uint64) {
-	if currentRound % 8 == 0 {
+	if currentRound%8 == 0 {
 		blockNumberBytes := make([]byte, 8)
 		binary.BigEndian.PutUint64(blockNumberBytes, currentRound)
 		heap.Push(h, models2.VrfRequest{
@@ -716,7 +689,7 @@ func GetFromState(key []byte, state []models.TealKeyValue) (models.TealValue, bo
 	return models.TealValue{}, false
 }
 
-func InitClients(algodAddress, algodToken, indexerAddress, indexerToken string) (*algod.Client, *indexer.Client, error){
+func InitClients(algodAddress, algodToken, indexerAddress, indexerToken string) (*algod.Client, *indexer.Client, error) {
 	var failedClients []string
 	algodClient, err := algod.MakeClient(algodAddress, algodToken)
 	if err != nil {
@@ -767,7 +740,7 @@ var RunDaemonCmd = &cobra.Command{
 			log.Error(err)
 			return
 		}
-		startingRound = (startingRound/8)*8
+		startingRound = (startingRound / 8) * 8
 		signingPrivateKey, err := mnemonic.ToPrivateKey(signingMnemonicString)
 		if err != nil {
 			log.Errorf("invalid signing mnemonic: %v", err)
@@ -824,7 +797,6 @@ var RunDaemonCmd = &cobra.Command{
 		log.Infof("app id: %d\n", appID)
 
 		startingRound += 8
-
 
 		log.Info("running...")
 
