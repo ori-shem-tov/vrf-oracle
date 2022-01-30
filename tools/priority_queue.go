@@ -9,6 +9,10 @@ func (h VrfRequestsHeap) Len() int           { return len(h) }
 func (h VrfRequestsHeap) Less(i, j int) bool { return h[i].BlockNumber < h[j].BlockNumber }
 func (h VrfRequestsHeap) Swap(i, j int)      { h[i], h[j] = h[j], h[i] }
 
+func (h *VrfRequestsHeap) Top() models.VrfRequest {
+	return (*h)[0]
+}
+
 func (h *VrfRequestsHeap) Push(x interface{}) {
 	// Push and Pop use pointer receivers because they modify the slice's length,
 	// not just its contents.

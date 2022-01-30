@@ -7,6 +7,10 @@ import (
 	"encoding/binary"
 	"encoding/hex"
 	"fmt"
+	"io/ioutil"
+	"os"
+	"strings"
+
 	"github.com/algorand/go-algorand-sdk/crypto"
 	"github.com/algorand/go-algorand-sdk/future"
 	"github.com/algorand/go-algorand-sdk/mnemonic"
@@ -15,16 +19,13 @@ import (
 	"github.com/ori-shem-tov/vrf-oracle/cmd/daemon"
 	log "github.com/sirupsen/logrus"
 	"github.com/spf13/cobra"
-	"io/ioutil"
-	"os"
-	"strings"
 )
 
 var (
-	appID                    uint64
-	requesterMnemonic		 string
-	block                    uint64
-	fee						 uint64
+	appID             uint64
+	requesterMnemonic string
+	block             uint64
+	fee               uint64
 )
 
 func init() {
@@ -150,7 +151,7 @@ var requestCmd = &cobra.Command{
 			log.Error(err)
 			return
 		}
-		algodClient, _, err := daemon.InitClients(daemon.AlgodAddress, daemon.AlgodToken, daemon.IndexerAddress, daemon.IndexerToken)
+		algodClient, err := daemon.InitClients(daemon.AlgodAddress, daemon.AlgodToken)
 		if err != nil {
 			log.Error(err)
 			return
@@ -215,7 +216,6 @@ var requestCmd = &cobra.Command{
 			}
 		}
 
-
 		//signedGroup, err := generateRequestTxnGroup(requesterSK, appEscrow, suggestedParams, feeStateValue.Uint, block, appID)
 		//
 		//txID, err := algodClient.SendRawTransaction(signedGroup).Do(context.Background())
@@ -232,4 +232,3 @@ var requestCmd = &cobra.Command{
 
 	},
 }
-

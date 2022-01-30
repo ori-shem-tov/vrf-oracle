@@ -2,6 +2,7 @@ package test
 
 import (
 	"context"
+
 	"github.com/algorand/go-algorand-sdk/crypto"
 	"github.com/algorand/go-algorand-sdk/future"
 	"github.com/algorand/go-algorand-sdk/mnemonic"
@@ -32,7 +33,7 @@ var cancelCmd = &cobra.Command{
 			log.Error(err)
 			return
 		}
-		algodClient, _, err := daemon.InitClients(daemon.AlgodAddress, daemon.AlgodToken, daemon.IndexerAddress, daemon.IndexerToken)
+		algodClient, err := daemon.InitClients(daemon.AlgodAddress, daemon.AlgodToken)
 		if err != nil {
 			log.Error(err)
 			return
@@ -93,4 +94,3 @@ var cancelCmd = &cobra.Command{
 		log.Infof("sent %s", txID)
 	},
 }
-

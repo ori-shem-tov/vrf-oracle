@@ -6,6 +6,8 @@ import (
 	"encoding/base64"
 	"encoding/binary"
 	"fmt"
+	"io/ioutil"
+
 	"github.com/algorand/go-algorand-sdk/client/v2/algod"
 	"github.com/algorand/go-algorand-sdk/crypto"
 	"github.com/algorand/go-algorand-sdk/future"
@@ -14,7 +16,6 @@ import (
 	"github.com/ori-shem-tov/vrf-oracle/cmd/daemon"
 	log "github.com/sirupsen/logrus"
 	"github.com/spf13/cobra"
-	"io/ioutil"
 )
 
 var (
@@ -104,7 +105,7 @@ func generateSignedAppCreate(approvalBytes, clearBytes []byte, globalState, loca
 
 func createApp(approvalProgram, clearProgram []byte, appCreatorSK ed25519.PrivateKey, owner, service, signingPK types.Address, fee uint64,
 	algodClient *algod.Client, suggestedParams types.SuggestedParams) (uint64, error) {
-	
+
 	globalStateSchema := types.StateSchema{
 		NumUint:      0,
 		NumByteSlice: 64,
@@ -116,7 +117,7 @@ func createApp(approvalProgram, clearProgram []byte, appCreatorSK ed25519.Privat
 	}
 
 	appArgs := generateAppArgsSlice(owner, service, signingPK, fee)
-	
+
 	stxBytes, err := generateSignedAppCreate(approvalProgram, clearProgram, globalStateSchema,
 		localStateSchema, appCreatorSK, appArgs, suggestedParams)
 	if err != nil {
@@ -193,7 +194,7 @@ var createAppCmd = &cobra.Command{
 			log.Error(err)
 			return
 		}
-		algodClient, _, err := daemon.InitClients(daemon.AlgodAddress, daemon.AlgodToken, daemon.IndexerAddress, daemon.IndexerToken)
+		algodClient, err := daemon.InitClients(daemon.AlgodAddress, daemon.AlgodToken)
 		if err != nil {
 			log.Error(err)
 			return
@@ -254,5 +255,3 @@ var createAppCmd = &cobra.Command{
 		}
 	},
 }
-
-
