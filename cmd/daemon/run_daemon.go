@@ -26,7 +26,7 @@ var (
 	vrfMnemonicString       string // the mnemonic for generating the vrf
 	serviceMnemonicString   string // the mnemonic for the service account (used to send responses to the smart-contract)
 	startingRound           uint64 // the round from which the daemon starts scanning
-	writeBlockInterval      uint64
+	writeBlockInterval      uint64 // the number of rounds to wait before writing again
 
 	AlgodAddress = os.Getenv("AF_ALGOD_ADDRESS")
 	AlgodToken   = os.Getenv("AF_ALGOD_TOKEN")

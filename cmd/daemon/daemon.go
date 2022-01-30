@@ -33,10 +33,10 @@ type VRFDaemon struct {
 
 	CurrentRound uint64 // The latest round we've sesen
 
-	Signer         crypto.Account
-	VRF            crypto.Account
-	AppCreator     crypto.Account
-	ServiceAccount crypto.Account
+	Signer         crypto.Account // Signs VRF output
+	VRF            crypto.Account // Generates VRF output
+	AppCreator     crypto.Account // Creates application
+	ServiceAccount crypto.Account // Sends updates
 }
 
 func (v *VRFDaemon) CreateApplications() error {
@@ -98,9 +98,7 @@ func (v *VRFDaemon) Start() {
 // handles requests for the current round: computes the VRF output and sends it to the smart-contract
 func (v *VRFDaemon) HandleBlock(block types.Block) error {
 
-	blockNumberBytes := make([]byte, 8)
-	binary.BigEndian.PutUint64(blockNumberBytes, uint64(block.Round))
-
+	blockNumberBytes := roundAsBytes(uint64(block.Round))
 	blockSeed := block.BlockHeader.Seed[:]
 
 	signedVrfOutput, vrfOutput, err := v.ComputeAndSignVRFForRound(block)
@@ -170,8 +168,7 @@ func (v *VRFDaemon) HandleBlock(block types.Block) error {
 // compute the VRF output and sign the concatenation of the input with the output (to be verified by the smart contract)
 func (v *VRFDaemon) ComputeAndSignVRFForRound(block types.Block) (types.Signature, []byte, error) {
 
-	blockNumberBytes := make([]byte, 8)
-	binary.BigEndian.PutUint64(blockNumberBytes, uint64(block.Round))
+	blockNumberBytes := roundAsBytes(uint64(block.Round))
 	vrfInput := sha512.Sum512_256(append(blockNumberBytes, block.BlockHeader.Seed[:]...))
 
 	proof, ok := getVrfPrivateKey(v.VRF.PrivateKey).ProveBytes(vrfInput[:])
@@ -185,7 +182,7 @@ func (v *VRFDaemon) ComputeAndSignVRFForRound(block types.Block) (types.Signatur
 	}
 
 	toSign := append(append(blockNumberBytes, block.BlockHeader.Seed[:]...), vrfOutput[:]...)
-	sig, err := crypto.TealSign(v.VRF.PrivateKey, toSign, v.AppHashAddr)
+	sig, err := crypto.TealSign(v.Signer.PrivateKey, toSign, v.AppHashAddr)
 	if err != nil {
 		return types.Signature{}, []byte{}, fmt.Errorf("error signing vrf output")
 	}
@@ -220,7 +217,7 @@ func (v *VRFDaemon) createOracleApp() (uint64, error) {
 	globalStateSchema := types.StateSchema{NumUint: 0, NumByteSlice: 64}
 	localStateSchema := types.StateSchema{NumUint: 0, NumByteSlice: 0}
 
-	blockNumberBytes := make([]byte, 8)
+	blockNumberBytes := roundAsBytes(v.CurrentRound)
 	binary.BigEndian.PutUint64(blockNumberBytes, v.CurrentRound)
 	args := [][]byte{
 		blockNumberBytes, v.Signer.PrivateKey[32:], v.VRF.PrivateKey[32:],
@@ -362,4 +359,10 @@ func getVrfPrivateKey(key ed25519.PrivateKey) libsodium_wrapper.VrfPrivkey {
 	var vrfPrivateKey libsodium_wrapper.VrfPrivkey
 	copy(vrfPrivateKey[:], key)
 	return vrfPrivateKey
+}
+
+func roundAsBytes(round uint64) []byte {
+	b := make([]byte, 8)
+	binary.BigEndian.PutUint64(b, round)
+	return b
 }
