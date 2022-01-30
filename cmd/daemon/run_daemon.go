@@ -1,12 +1,14 @@
 package daemon
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"strings"
 
 	"github.com/algorand/go-algorand-sdk/client/v2/algod"
 	"github.com/algorand/go-algorand-sdk/crypto"
+	"github.com/ori-shem-tov/vrf-oracle/daemon"
 
 	log "github.com/sirupsen/logrus"
 
@@ -19,14 +21,16 @@ const (
 )
 
 var (
-	appCreatorMnemonic      string
-	approvalProgramFilename string
-	clearProgramFilename    string
-	signingMnemonicString   string // the mnemonic for signing vrf responses
-	vrfMnemonicString       string // the mnemonic for generating the vrf
-	serviceMnemonicString   string // the mnemonic for the service account (used to send responses to the smart-contract)
-	startingRound           uint64 // the round from which the daemon starts scanning
-	writeBlockInterval      uint64 // the number of rounds to wait before writing again
+	approvalProgramFilename string // the path to the approval program as teal
+	clearProgramFilename    string // the path to the clear program as teal
+
+	appCreatorMnemonic    string // the mnemonic for the account responsible for creating the applications
+	signingMnemonicString string // the mnemonic for signing vrf responses
+	vrfMnemonicString     string // the mnemonic for generating the vrf
+	serviceMnemonicString string // the mnemonic for the service account (used to send responses to the smart-contract)
+
+	startingRound      uint64 // the round from which the daemon starts scanning
+	writeBlockInterval uint64 // the number of rounds to wait before writing again
 
 	AlgodAddress = os.Getenv("AF_ALGOD_ADDRESS")
 	AlgodToken   = os.Getenv("AF_ALGOD_TOKEN")
@@ -108,12 +112,23 @@ func AccountFromMnemonic(mn string) (crypto.Account, error) {
 	}, nil
 }
 
+func getStartingRound(algodClient *algod.Client, inputRound uint64) (uint64, error) {
+	if inputRound != 0 {
+		return inputRound, nil
+	}
+
+	status, err := algodClient.Status().Do(context.Background())
+	if err != nil {
+		return 0, fmt.Errorf("failed getting status from algod: %v", err)
+	}
+
+	return status.LastRound, nil
+}
+
 var RunDaemonCmd = &cobra.Command{
 	Use:   "run-daemon",
 	Short: "runs the daemon",
 	Run: func(cmd *cobra.Command, args []string) {
-		vrfd := VRFDaemon{}
-
 		if err := TestEnvironmentVariables(); err != nil {
 			log.Fatalf("error testing environment variables: %+v", err)
 		}
@@ -122,38 +137,40 @@ var RunDaemonCmd = &cobra.Command{
 		if err != nil {
 			log.Fatalf("failed to initialize clients: %+v", err)
 		}
-		vrfd.AlgodClient = algodClient
 
 		signerAcct, err := AccountFromMnemonic(signingMnemonicString)
 		if err != nil {
 			log.Fatalf("invalid signing mnemonic: %v", err)
 		}
-		vrfd.Signer = signerAcct
 
 		vrfAcct, err := AccountFromMnemonic(vrfMnemonicString)
 		if err != nil {
 			log.Errorf("invalid vrf mnemonic: %v", err)
 			return
 		}
-		vrfd.VRF = vrfAcct
 
 		appAcct, err := AccountFromMnemonic(appCreatorMnemonic)
 		if err != nil {
 			log.Fatalf("invalid app creator mnemonic: %v", err)
 		}
-		vrfd.AppCreator = appAcct
 
-		sa, err := AccountFromMnemonic(serviceMnemonicString)
+		serviceAcct, err := AccountFromMnemonic(serviceMnemonicString)
 		if err != nil {
 			log.Fatalf("Failed to create service account from mnemonic: %v", err)
 		}
-		vrfd.ServiceAccount = sa
 
 		startingRound, err = getStartingRound(algodClient, startingRound)
 		if err != nil {
 			log.Fatalf("failed to get starting round: %+v", err)
 		}
-		vrfd.CurrentRound = (startingRound / writeBlockInterval) * writeBlockInterval
+		startingRound = (startingRound / writeBlockInterval) * writeBlockInterval
+
+		vrfd := daemon.New(
+			algodClient,
+			signerAcct, vrfAcct, appAcct, serviceAcct,
+			writeBlockInterval, startingRound,
+			approvalProgramFilename, clearProgramFilename,
+		)
 
 		log.Infof("creating applications...")
 		vrfd.CreateApplications()

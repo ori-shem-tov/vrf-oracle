@@ -22,16 +22,22 @@ import (
 var (
 	numOfDummyTxns = 4
 	dummyAppBytes  = []byte{0x05, 0x81, 0x01} // pragma 5; pushint 1;
+
+	waitBetweenBlocksMS = 4500
 )
 
 type VRFDaemon struct {
 	AlgodClient *algod.Client // Client used to interact with the chain
 
+	ApprovalSourceFile string
+	ClearSourceFile    string
+
 	DummyAppID  uint64        // Dummy app used to increase budget
 	AppID       uint64        // Application that validates and stores randomness
 	AppHashAddr types.Address // Hash of application approval program, needed to produce ed25519 bytes to verify
 
-	CurrentRound uint64 // The latest round we've sesen
+	WriteInterval uint64 // Number of rounds between writing updated value
+	CurrentRound  uint64 // The latest round we've sesen
 
 	Signer         crypto.Account // Signs VRF output
 	VRF            crypto.Account // Generates VRF output
@@ -39,9 +45,32 @@ type VRFDaemon struct {
 	ServiceAccount crypto.Account // Sends updates
 }
 
-func (v *VRFDaemon) CreateApplications() error {
-	log.Info("creating dummy app...")
+func New(client *algod.Client, signer, vrf, app, service crypto.Account, writeInterval, roundStart uint64, approval, clear string) *VRFDaemon {
+	return &VRFDaemon{
+		AlgodClient: client,
 
+		ApprovalSourceFile: approval,
+		ClearSourceFile:    clear,
+
+		Signer:         signer,
+		VRF:            vrf,
+		AppCreator:     app,
+		ServiceAccount: service,
+		CurrentRound:   roundStart,
+	}
+}
+
+func (v *VRFDaemon) CreateApplications() error {
+
+	if v.DummyAppID != 0 {
+		return fmt.Errorf("already have dummy app id: %d", v.DummyAppID)
+	}
+
+	if v.AppID != 0 {
+		return fmt.Errorf("already have oracle app id: %d", v.AppID)
+	}
+
+	log.Info("creating dummy app...")
 	dummyAppID, err := v.createDummyApp()
 	if err != nil {
 		return fmt.Errorf("failed to create dummy app: %+v", err)
@@ -49,7 +78,6 @@ func (v *VRFDaemon) CreateApplications() error {
 	v.DummyAppID = dummyAppID
 
 	log.Info("creating oracle app")
-
 	appIdx, err := v.createOracleApp()
 	if err != nil {
 		return fmt.Errorf("failed to create oracle app: %+v", err)
@@ -60,7 +88,7 @@ func (v *VRFDaemon) CreateApplications() error {
 }
 
 func (v *VRFDaemon) Start() {
-	v.CurrentRound += writeBlockInterval
+	v.CurrentRound += v.WriteInterval
 
 	for {
 		sleepTime := time.Duration(waitBetweenBlocksMS) * time.Millisecond
@@ -72,7 +100,7 @@ func (v *VRFDaemon) Start() {
 		block, err := getBlock(v.AlgodClient, v.CurrentRound)
 		if err != nil {
 			log.Errorf("error getting block seed of block %d from algod", v.CurrentRound)
-			return
+			continue
 		}
 
 		if block.Round <= types.Round(v.CurrentRound) {
@@ -80,7 +108,7 @@ func (v *VRFDaemon) Start() {
 			continue
 		}
 
-		if uint64(block.Round)%writeBlockInterval != 0 {
+		if uint64(block.Round)%v.WriteInterval != 0 {
 			// We only want to write on the interval specified
 			continue
 		}
@@ -90,7 +118,7 @@ func (v *VRFDaemon) Start() {
 			continue
 		}
 
-		// Update our last seen round
+		// Update our last seen round only after we've actually handled it
 		v.CurrentRound = uint64(block.Round)
 	}
 }
@@ -198,7 +226,7 @@ func (v *VRFDaemon) createOracleApp() (uint64, error) {
 		return 0, fmt.Errorf("failed to get suggested params: %+v", err)
 	}
 
-	approvalBytes, clearBytes, err := compileTeal(v.AlgodClient, approvalProgramFilename, clearProgramFilename)
+	approvalBytes, clearBytes, err := compileTeal(v.AlgodClient, v.ApprovalSourceFile, v.ClearSourceFile)
 	if err != nil {
 		return 0, fmt.Errorf("failed to compile teal: %+v", err)
 	}
@@ -335,19 +363,6 @@ func compileTeal(algodClient *algod.Client, approvalProgramFilename, clearProgra
 	}
 
 	return compiledApprovalBytes, compiledClearBytes, nil
-}
-
-func getStartingRound(algodClient *algod.Client, inputRound uint64) (uint64, error) {
-	if inputRound != 0 {
-		return inputRound, nil
-	}
-
-	status, err := algodClient.Status().Do(context.Background())
-	if err != nil {
-		return 0, fmt.Errorf("failed getting status from algod: %v", err)
-	}
-
-	return status.LastRound, nil
 }
 
 func getBlock(a *algod.Client, round uint64) (types.Block, error) {
