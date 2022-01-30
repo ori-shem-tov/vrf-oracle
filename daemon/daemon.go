@@ -20,10 +20,9 @@ import (
 )
 
 var (
-	numOfDummyTxns = 4
-	dummyAppBytes  = []byte{0x05, 0x81, 0x01} // pragma 5; pushint 1;
-
-	waitBetweenBlocksMS = 4500
+	numOfDummyTxns      = 4                        // Number of extra `dummy` txns to help pad opcode budget
+	dummyAppBytes       = []byte{0x05, 0x81, 0x01} // pragma 5; pushint 1;
+	waitBetweenBlocksMS = 4500                     // Num ms between blocks
 )
 
 type VRFDaemon struct {
@@ -45,6 +44,7 @@ type VRFDaemon struct {
 	ServiceAccount crypto.Account // Sends updates
 }
 
+// New returns a pointer to a VRFDaemon, you should call `CreateApplications` (if necessary) and `Start` to kick it off
 func New(client *algod.Client, signer, vrf, app, service crypto.Account, writeInterval, roundStart uint64, approval, clear string) *VRFDaemon {
 	return &VRFDaemon{
 		AlgodClient: client,
@@ -56,10 +56,14 @@ func New(client *algod.Client, signer, vrf, app, service crypto.Account, writeIn
 		VRF:            vrf,
 		AppCreator:     app,
 		ServiceAccount: service,
-		CurrentRound:   roundStart,
+
+		WriteInterval: writeInterval,
+		CurrentRound:  roundStart,
 	}
 }
 
+// CreateApplications creates the dummy app used for budget increase
+// and the main oracle application
 func (v *VRFDaemon) CreateApplications() error {
 
 	if v.DummyAppID != 0 {
@@ -87,6 +91,9 @@ func (v *VRFDaemon) CreateApplications() error {
 	return nil
 }
 
+// Start starts the loop that is continuously checking for new rounds.
+// If it finds a new round and the round is one we should write for
+// it creates a new vrf and sends a transaction to update the state of the application
 func (v *VRFDaemon) Start() {
 	v.CurrentRound += v.WriteInterval
 
@@ -261,7 +268,7 @@ func (v *VRFDaemon) createOracleApp() (uint64, error) {
 	}
 
 	appCalls := []types.Transaction{appCall}
-	for i := 0; i < 4; i++ {
+	for i := 0; i < numOfDummyTxns; i++ {
 		dummyAppCall, err := future.MakeApplicationNoOpTx(
 			v.DummyAppID, nil, nil, nil, nil, sp, v.AppCreator.Address,
 			[]byte{byte(i)}, types.Digest{}, [32]byte{}, types.ZeroAddress,
