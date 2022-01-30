@@ -15,6 +15,8 @@ import (
 	"github.com/ori-shem-tov/vrf-oracle/cmd/daemon"
 	log "github.com/sirupsen/logrus"
 	"github.com/spf13/cobra"
+	"io/ioutil"
+	"os"
 	"strings"
 )
 
@@ -73,6 +75,20 @@ func generateRequestTxnGroup(requesterSK ed25519.PrivateKey, appEscrow types.Add
 		return nil, err
 	}
 
+	optinCall, err := future.MakeApplicationOptInTx(
+		appID,
+		nil,
+		nil,
+		nil,
+		nil,
+		suggestedParams,
+		requesterAddr,
+		nil,
+		types.Digest{},
+		[32]byte{},
+		types.ZeroAddress,
+	)
+
 	paymentTxn, err := future.MakePaymentTxn(
 		requesterAddr.String(),
 		appEscrow.String(),
@@ -107,7 +123,7 @@ func generateRequestTxnGroup(requesterSK ed25519.PrivateKey, appEscrow types.Add
 	)
 
 	grouped, err := transaction.AssignGroupID(
-		[]types.Transaction{paymentTxn, appCall}, "")
+		[]types.Transaction{optinCall, paymentTxn, appCall}, "")
 
 	if err != nil {
 		return nil, err
@@ -161,20 +177,58 @@ var requestCmd = &cobra.Command{
 			log.Errorf("app %d doesn't have \"service_fee\" key", appID)
 			return
 		}
-
-		signedGroup, err := generateRequestTxnGroup(requesterSK, appEscrow, suggestedParams, feeStateValue.Uint, block, appID)
-
-		txID, err := algodClient.SendRawTransaction(signedGroup).Do(context.Background())
+		requesterAddr, err := crypto.GenerateAddressFromSK(requesterSK)
 		if err != nil {
 			log.Error(err)
 			return
 		}
-		_, err = waitForTx(algodClient, txID)
-		if err != nil {
-			log.Error(err)
-			return
+		for j := 0; j < 5; j++ {
+			accounts := make([]crypto.Account, 1000)
+			var signedPayments []byte
+			var signedRequests []byte
+			for i := 0; i < len(accounts); i++ {
+				accounts[i] = crypto.GenerateAccount()
+				payment, err := future.MakePaymentTxn(requesterAddr.String(), accounts[i].Address.String(), 1000000, nil, "", suggestedParams)
+				if err != nil {
+					log.Error(err)
+					return
+				}
+				_, signedPayment, err := crypto.SignTransaction(requesterSK, payment)
+				if err != nil {
+					log.Error(err)
+					return
+				}
+				signedPayments = append(signedPayments, signedPayment...)
+
+				signedGroup, err := generateRequestTxnGroup(accounts[i].PrivateKey, appEscrow, suggestedParams, feeStateValue.Uint, block, appID)
+				signedRequests = append(signedRequests, signedGroup...)
+			}
+			err = ioutil.WriteFile(fmt.Sprintf("large-pays%d.stx", j), signedPayments, os.ModePerm)
+			if err != nil {
+				log.Error(err)
+				return
+			}
+			err = ioutil.WriteFile(fmt.Sprintf("large-reqs%d.stx", j), signedRequests, os.ModePerm)
+			if err != nil {
+				log.Error(err)
+				return
+			}
 		}
-		log.Infof("sent %s", txID)
+
+
+		//signedGroup, err := generateRequestTxnGroup(requesterSK, appEscrow, suggestedParams, feeStateValue.Uint, block, appID)
+		//
+		//txID, err := algodClient.SendRawTransaction(signedGroup).Do(context.Background())
+		//if err != nil {
+		//	log.Error(err)
+		//	return
+		//}
+		//_, err = waitForTx(algodClient, txID)
+		//if err != nil {
+		//	log.Error(err)
+		//	return
+		//}
+		//log.Infof("sent %s", txID)
 
 	},
 }

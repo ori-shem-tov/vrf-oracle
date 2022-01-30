@@ -18,13 +18,13 @@ import (
 )
 
 var (
-	appCreatorMnemonic         string
+	appCreatorMnemonic      string
 	approvalProgramFilename string
-	clearProgramFilename string
-	ownerAddrString string
-	vrfServiceAddrString string
-	signingPKString string
-	shouldCreateDummy bool
+	clearProgramFilename    string
+	ownerAddrString         string
+	vrfPKAddrString         string
+	signingPKString         string
+	shouldCreateDummy       bool
 )
 
 func init() {
@@ -43,9 +43,9 @@ func init() {
 		"the address of the owner receiving the fees")
 	daemon.MarkFlagRequired(createAppCmd.Flags(), "owner")
 
-	createAppCmd.Flags().StringVar(&vrfServiceAddrString, "vrf-service-addr", "",
-		"the address of the VRF service account submitting responses to the blockchain")
-	daemon.MarkFlagRequired(createAppCmd.Flags(), "vrf-service-addr")
+	createAppCmd.Flags().StringVar(&vrfPKAddrString, "vrf-pk-addr", "",
+		"the public key used to generate VRF outputs (expected as an address with checksum)")
+	daemon.MarkFlagRequired(createAppCmd.Flags(), "vrf-pk-addr")
 
 	createAppCmd.Flags().StringVar(&signingPKString, "signing-pk-addr", "",
 		"the public key used to sign VRF responses (expected as an address with checksum)")
@@ -106,13 +106,13 @@ func createApp(approvalProgram, clearProgram []byte, appCreatorSK ed25519.Privat
 	algodClient *algod.Client, suggestedParams types.SuggestedParams) (uint64, error) {
 	
 	globalStateSchema := types.StateSchema{
-		NumUint:      2,
-		NumByteSlice: 3,
+		NumUint:      0,
+		NumByteSlice: 64,
 	}
 
 	localStateSchema := types.StateSchema{
-		NumUint:      1,
-		NumByteSlice: 2,
+		NumUint:      0,
+		NumByteSlice: 0,
 	}
 
 	appArgs := generateAppArgsSlice(owner, service, signingPK, fee)
@@ -209,7 +209,7 @@ var createAppCmd = &cobra.Command{
 			log.Error(err)
 			return
 		}
-		vrfService, err := types.DecodeAddress(vrfServiceAddrString)
+		vrfPKAddr, err := types.DecodeAddress(vrfPKAddrString)
 		if err != nil {
 			log.Error(err)
 			return
@@ -234,7 +234,7 @@ var createAppCmd = &cobra.Command{
 			return
 		}
 
-		appID, err := createApp(approvalBytes, clearBytes, appCreatorSK, owner, vrfService, signingPKAddr, fee, algodClient, sp)
+		appID, err := createApp(approvalBytes, clearBytes, appCreatorSK, owner, vrfPKAddr, signingPKAddr, fee, algodClient, sp)
 
 		if err != nil {
 			log.Error(err)
