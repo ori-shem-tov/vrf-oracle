@@ -17,11 +17,11 @@ func init() {
 
 	withdrawLostFundsCmd.Flags().Uint64Var(&appID, "app-id", 0,
 		"Game app ID")
-	daemon.MarkFlagRequired(withdrawLostFundsCmd.Flags(), "app-id")
+	withdrawLostFundsCmd.MarkFlagRequired("app-id")
 
 	withdrawLostFundsCmd.Flags().StringVar(&requesterMnemonic, "owner-mnemonic", "",
 		"25-word mnemonic of the owner")
-	daemon.MarkFlagRequired(withdrawLostFundsCmd.Flags(), "owner-mnemonic")
+	withdrawLostFundsCmd.MarkFlagRequired("owner-mnemonic")
 }
 
 var withdrawLostFundsCmd = &cobra.Command{

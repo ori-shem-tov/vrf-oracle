@@ -32,29 +32,27 @@ func init() {
 	daemon.SetLogger()
 
 	createAppCmd.Flags().StringVar(&appCreatorMnemonic, "app-creator-mnemonic", "", "25-word mnemonic of the app creator")
-	daemon.MarkFlagRequired(createAppCmd.Flags(), "app-creator-mnemonic")
+	createAppCmd.MarkFlagRequired("app-creator-mnemonic")
 
 	createAppCmd.Flags().StringVar(&approvalProgramFilename, "approval-program", "", "TEAL script of the approval program")
-	daemon.MarkFlagRequired(createAppCmd.Flags(), "approval-program")
+	createAppCmd.MarkFlagRequired("approval-program")
 
 	createAppCmd.Flags().StringVar(&clearProgramFilename, "clear-program", "", "TEAL script of the clear program")
-	daemon.MarkFlagRequired(createAppCmd.Flags(), "clear-program")
+	createAppCmd.MarkFlagRequired("clear-program")
 
-	createAppCmd.Flags().StringVar(&ownerAddrString, "owner", "",
-		"the address of the owner receiving the fees")
-	daemon.MarkFlagRequired(createAppCmd.Flags(), "owner")
+	createAppCmd.Flags().StringVar(&ownerAddrString, "owner", "", "the address of the owner receiving the fees")
+	createAppCmd.MarkFlagRequired("owner")
 
 	createAppCmd.Flags().StringVar(&vrfPKAddrString, "vrf-pk-addr", "",
 		"the public key used to generate VRF outputs (expected as an address with checksum)")
-	daemon.MarkFlagRequired(createAppCmd.Flags(), "vrf-pk-addr")
+	createAppCmd.MarkFlagRequired("vrf-pk-addr")
 
 	createAppCmd.Flags().StringVar(&signingPKString, "signing-pk-addr", "",
 		"the public key used to sign VRF responses (expected as an address with checksum)")
-	daemon.MarkFlagRequired(createAppCmd.Flags(), "signing-pk-addr")
+	createAppCmd.MarkFlagRequired("signing-pk-addr")
 
-	createAppCmd.Flags().Uint64Var(&fee, "fee", 0,
-		"service fee")
-	daemon.MarkFlagRequired(createAppCmd.Flags(), "fee")
+	createAppCmd.Flags().Uint64Var(&fee, "fee", 0, "service fee")
+	createAppCmd.MarkFlagRequired("fee")
 
 	createAppCmd.Flags().BoolVar(&shouldCreateDummy, "should-create-dummy", false, "pass if a dummy app is also needed")
 }

@@ -17,11 +17,11 @@ func init() {
 
 	cancelCmd.Flags().Uint64Var(&appID, "app-id", 0,
 		"Game app ID")
-	daemon.MarkFlagRequired(cancelCmd.Flags(), "app-id")
+	cancelCmd.MarkFlagRequired("app-id")
 
 	cancelCmd.Flags().StringVar(&requesterMnemonic, "requester-mnemonic", "",
 		"25-word mnemonic of the requester")
-	daemon.MarkFlagRequired(cancelCmd.Flags(), "requester-mnemonic")
+	cancelCmd.MarkFlagRequired("requester-mnemonic")
 }
 
 var cancelCmd = &cobra.Command{

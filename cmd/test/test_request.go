@@ -35,15 +35,15 @@ func init() {
 
 	requestCmd.Flags().Uint64Var(&appID, "app-id", 0,
 		"Game app ID")
-	daemon.MarkFlagRequired(requestCmd.Flags(), "app-id")
+	requestCmd.MarkFlagRequired("app-id")
 
 	requestCmd.Flags().StringVar(&requesterMnemonic, "requester-mnemonic", "",
 		"25-word mnemonic of the requester")
-	daemon.MarkFlagRequired(requestCmd.Flags(), "requester-mnemonic")
+	requestCmd.MarkFlagRequired("requester-mnemonic")
 
 	requestCmd.Flags().Uint64Var(&block, "block", 0,
 		"the block to take the seed for the VRF input")
-	daemon.MarkFlagRequired(requestCmd.Flags(), "block")
+	requestCmd.MarkFlagRequired("block")
 }
 
 func testRequestArguments() (ed25519.PrivateKey, types.Address, error) {

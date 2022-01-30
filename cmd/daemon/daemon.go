@@ -80,7 +80,7 @@ func (v *VRFDaemon) Start() {
 			continue
 		}
 
-		if block.Round%writeBlockInterval != 0 {
+		if uint64(block.Round)%writeBlockInterval != 0 {
 			// We only want to write on the interval specified
 			continue
 		}

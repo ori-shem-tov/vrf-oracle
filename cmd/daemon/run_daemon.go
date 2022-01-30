@@ -9,10 +9,13 @@ import (
 	"github.com/algorand/go-algorand-sdk/crypto"
 
 	log "github.com/sirupsen/logrus"
-	"github.com/spf13/pflag"
 
 	"github.com/algorand/go-algorand-sdk/mnemonic"
 	"github.com/spf13/cobra"
+)
+
+const (
+	waitBetweenBlocksMS = 4500
 )
 
 var (
@@ -23,23 +26,12 @@ var (
 	vrfMnemonicString       string // the mnemonic for generating the vrf
 	serviceMnemonicString   string // the mnemonic for the service account (used to send responses to the smart-contract)
 	startingRound           uint64 // the round from which the daemon starts scanning
+	writeBlockInterval      uint64
 
 	AlgodAddress = os.Getenv("AF_ALGOD_ADDRESS")
 	AlgodToken   = os.Getenv("AF_ALGOD_TOKEN")
 	logLevelEnv  = strings.ToLower(os.Getenv("VRF_LOG_LEVEL"))
 )
-
-const (
-	waitBetweenBlocksMS = 4500
-	writeBlockInterval  = 8
-)
-
-func MarkFlagRequired(flag *pflag.FlagSet, name string) {
-	err := cobra.MarkFlagRequired(flag, name)
-	if err != nil {
-		panic(err)
-	}
-}
 
 func SetLogger() {
 	log.SetFormatter(&log.TextFormatter{FullTimestamp: true})
@@ -57,27 +49,31 @@ func init() {
 
 	RunDaemonCmd.Flags().StringVar(&signingMnemonicString, "signing-mnemonic", "",
 		"25-word mnemonic of the oracle for signing (required)")
-	MarkFlagRequired(RunDaemonCmd.Flags(), "signing-mnemonic")
+	RunDaemonCmd.MarkFlagRequired("signing-mnemonic")
 
 	RunDaemonCmd.Flags().StringVar(&vrfMnemonicString, "vrf-mnemonic", "",
 		"25-word mnemonic of the oracle for computing vrf (required)")
-	MarkFlagRequired(RunDaemonCmd.Flags(), "vrf-mnemonic")
+	RunDaemonCmd.MarkFlagRequired("vrf-mnemonic")
 
 	RunDaemonCmd.Flags().StringVar(&serviceMnemonicString, "service-mnemonic", "",
 		"25-word mnemonic of the service for writing the response (required)")
-	MarkFlagRequired(RunDaemonCmd.Flags(), "service-mnemonic")
+	RunDaemonCmd.MarkFlagRequired("service-mnemonic")
+
+	RunDaemonCmd.Flags().StringVar(&appCreatorMnemonic, "app-creator-mnemonic", "",
+		"25-word mnemonic of the app creator account used for creating the application (required)")
+	RunDaemonCmd.MarkFlagRequired("app-creator-mnemonic")
+
+	RunDaemonCmd.Flags().StringVar(&approvalProgramFilename, "approval-program", "", "TEAL script of the approval program")
+	RunDaemonCmd.MarkFlagRequired("approval-program")
+
+	RunDaemonCmd.Flags().StringVar(&clearProgramFilename, "clear-program", "", "TEAL script of the clear program")
+	RunDaemonCmd.MarkFlagRequired("clear-program")
 
 	RunDaemonCmd.Flags().Uint64Var(&startingRound, "round", 0,
 		"the round to start scanning from (optional. default: current round)")
 
-	RunDaemonCmd.Flags().StringVar(&appCreatorMnemonic, "app-creator-mnemonic", "", "25-word mnemonic of the app creator")
-	MarkFlagRequired(RunDaemonCmd.Flags(), "app-creator-mnemonic")
-
-	RunDaemonCmd.Flags().StringVar(&approvalProgramFilename, "approval-program", "", "TEAL script of the approval program")
-	MarkFlagRequired(RunDaemonCmd.Flags(), "approval-program")
-
-	RunDaemonCmd.Flags().StringVar(&clearProgramFilename, "clear-program", "", "TEAL script of the clear program")
-	MarkFlagRequired(RunDaemonCmd.Flags(), "clear-program")
+	RunDaemonCmd.Flags().Uint64Var(&startingRound, "write-interval", 8,
+		"number of blocks to wait before writing again")
 }
 
 func InitClients(algodAddress, algodToken string) (*algod.Client, error) {
