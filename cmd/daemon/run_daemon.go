@@ -16,10 +16,6 @@ import (
 	"github.com/spf13/cobra"
 )
 
-const (
-	waitBetweenBlocksMS = 4500
-)
-
 var (
 	approvalProgramFilename string // the path to the approval program as teal
 	clearProgramFilename    string // the path to the clear program as teal
