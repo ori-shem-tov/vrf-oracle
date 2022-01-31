@@ -8,6 +8,7 @@ import (
 
 func init() {
 	rootCmd.AddCommand(daemon.RunDaemonCmd)
+	rootCmd.AddCommand(daemon.RunFromConfig)
 	rootCmd.AddCommand(test.TestCmd)
 }
 
@@ -19,7 +20,6 @@ var rootCmd = &cobra.Command{
 		cmd.HelpFunc()(cmd, args)
 	},
 }
-
 
 func main() {
 	err := rootCmd.Execute()

@@ -6,6 +6,8 @@ import (
 	"encoding/base64"
 	"encoding/binary"
 	"fmt"
+	"io/ioutil"
+
 	"github.com/algorand/go-algorand-sdk/client/v2/algod"
 	"github.com/algorand/go-algorand-sdk/crypto"
 	"github.com/algorand/go-algorand-sdk/future"
@@ -14,7 +16,6 @@ import (
 	"github.com/ori-shem-tov/vrf-oracle/cmd/daemon"
 	log "github.com/sirupsen/logrus"
 	"github.com/spf13/cobra"
-	"io/ioutil"
 )
 
 var (
@@ -31,29 +32,27 @@ func init() {
 	daemon.SetLogger()
 
 	createAppCmd.Flags().StringVar(&appCreatorMnemonic, "app-creator-mnemonic", "", "25-word mnemonic of the app creator")
-	daemon.MarkFlagRequired(createAppCmd.Flags(), "app-creator-mnemonic")
+	createAppCmd.MarkFlagRequired("app-creator-mnemonic")
 
 	createAppCmd.Flags().StringVar(&approvalProgramFilename, "approval-program", "", "TEAL script of the approval program")
-	daemon.MarkFlagRequired(createAppCmd.Flags(), "approval-program")
+	createAppCmd.MarkFlagRequired("approval-program")
 
 	createAppCmd.Flags().StringVar(&clearProgramFilename, "clear-program", "", "TEAL script of the clear program")
-	daemon.MarkFlagRequired(createAppCmd.Flags(), "clear-program")
+	createAppCmd.MarkFlagRequired("clear-program")
 
-	createAppCmd.Flags().StringVar(&ownerAddrString, "owner", "",
-		"the address of the owner receiving the fees")
-	daemon.MarkFlagRequired(createAppCmd.Flags(), "owner")
+	createAppCmd.Flags().StringVar(&ownerAddrString, "owner", "", "the address of the owner receiving the fees")
+	createAppCmd.MarkFlagRequired("owner")
 
 	createAppCmd.Flags().StringVar(&vrfPKAddrString, "vrf-pk-addr", "",
 		"the public key used to generate VRF outputs (expected as an address with checksum)")
-	daemon.MarkFlagRequired(createAppCmd.Flags(), "vrf-pk-addr")
+	createAppCmd.MarkFlagRequired("vrf-pk-addr")
 
 	createAppCmd.Flags().StringVar(&signingPKString, "signing-pk-addr", "",
 		"the public key used to sign VRF responses (expected as an address with checksum)")
-	daemon.MarkFlagRequired(createAppCmd.Flags(), "signing-pk-addr")
+	createAppCmd.MarkFlagRequired("signing-pk-addr")
 
-	createAppCmd.Flags().Uint64Var(&fee, "fee", 0,
-		"service fee")
-	daemon.MarkFlagRequired(createAppCmd.Flags(), "fee")
+	createAppCmd.Flags().Uint64Var(&fee, "fee", 0, "service fee")
+	createAppCmd.MarkFlagRequired("fee")
 
 	createAppCmd.Flags().BoolVar(&shouldCreateDummy, "should-create-dummy", false, "pass if a dummy app is also needed")
 }
@@ -104,7 +103,7 @@ func generateSignedAppCreate(approvalBytes, clearBytes []byte, globalState, loca
 
 func createApp(approvalProgram, clearProgram []byte, appCreatorSK ed25519.PrivateKey, owner, service, signingPK types.Address, fee uint64,
 	algodClient *algod.Client, suggestedParams types.SuggestedParams) (uint64, error) {
-	
+
 	globalStateSchema := types.StateSchema{
 		NumUint:      0,
 		NumByteSlice: 64,
@@ -116,7 +115,7 @@ func createApp(approvalProgram, clearProgram []byte, appCreatorSK ed25519.Privat
 	}
 
 	appArgs := generateAppArgsSlice(owner, service, signingPK, fee)
-	
+
 	stxBytes, err := generateSignedAppCreate(approvalProgram, clearProgram, globalStateSchema,
 		localStateSchema, appCreatorSK, appArgs, suggestedParams)
 	if err != nil {
@@ -193,7 +192,7 @@ var createAppCmd = &cobra.Command{
 			log.Error(err)
 			return
 		}
-		algodClient, _, err := daemon.InitClients(daemon.AlgodAddress, daemon.AlgodToken, daemon.IndexerAddress, daemon.IndexerToken)
+		algodClient, err := daemon.InitClients(daemon.AlgodAddress, daemon.AlgodToken)
 		if err != nil {
 			log.Error(err)
 			return
@@ -254,5 +253,3 @@ var createAppCmd = &cobra.Command{
 		}
 	},
 }
-
-

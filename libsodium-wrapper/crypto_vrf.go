@@ -1,3 +1,5 @@
+package libsodium_wrapper
+
 // Copyright (C) 2019-2021 Algorand, Inc.
 // This file is part of go-algorand
 //
@@ -13,8 +15,6 @@
 //
 // You should have received a copy of the GNU Affero General Public License
 // along with go-algorand.  If not, see <https://www.gnu.org/licenses/>.
-
-package libsodium_wrapper
 
 // #cgo CFLAGS: -Wall -std=c99
 // #cgo darwin,amd64 CFLAGS: -I${SRCDIR}/../libs/darwin/amd64/include

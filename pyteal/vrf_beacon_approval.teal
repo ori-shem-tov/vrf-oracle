@@ -38,30 +38,19 @@ main_l10:
 txna ApplicationArgs 1
 btoi
 store 0
-byte ""
-app_global_get
-int 0
-extract_uint64
-int 8
-+
-load 0
-==
-assert
 txna ApplicationArgs 1
 txna ApplicationArgs 2
 txna ApplicationArgs 3
 txna ApplicationArgs 4
 byte ""
 app_global_get
-int 8
-int 32
-extract3
-callsub sub5
+extract 8 32
+callsub validatevrf_5
 load 0
 txna ApplicationArgs 3
-callsub sub6
+callsub storevrf_6
 txna ApplicationArgs 1
-callsub sub4
+callsub updatelastround_4
 int 1
 return
 main_l11:
@@ -87,11 +76,11 @@ extract_uint64
 >
 assert
 load 0
-callsub sub1
+callsub getslotfromround_1
 app_global_get
 int 32
 load 0
-callsub sub2
+callsub getseedindexfromround_2
 *
 int 32
 extract3
@@ -135,15 +124,15 @@ txna ApplicationArgs 3
 txna ApplicationArgs 4
 txna ApplicationArgs 5
 txna ApplicationArgs 1
-callsub sub5
+callsub validatevrf_5
 int 0
 int 63
 byte "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-callsub sub7
+callsub initglobalstate_7
 txna ApplicationArgs 0
 btoi
 txna ApplicationArgs 4
-callsub sub6
+callsub storevrf_6
 byte ""
 txna ApplicationArgs 0
 txna ApplicationArgs 1
@@ -153,7 +142,9 @@ concat
 app_global_put
 int 1
 return
-sub0: // ceiling8
+
+// ceiling8
+ceiling8_0:
 store 2
 load 2
 int 7
@@ -161,85 +152,85 @@ int 7
 int 8
 /
 retsub
-sub1: // get_slot_from_round
+
+// get_slot_from_round
+getslotfromround_1:
 store 1
 load 1
-callsub sub0
+callsub ceiling8_0
 int 189
 %
 int 3
 /
 itob
 retsub
-sub2: // get_seed_index_from_round
+
+// get_seed_index_from_round
+getseedindexfromround_2:
 store 3
 load 3
-callsub sub0
+callsub ceiling8_0
 int 189
 %
 int 3
 %
 retsub
-sub3: // generate_slot_with_new_seed
+
+// generate_slot_with_new_seed
+generateslotwithnewseed_3:
 store 15
 store 14
 store 13
 load 15
 int 0
 ==
-bnz sub3_l6
+bnz generateslotwithnewseed_3_l6
 load 15
 int 1
 ==
-bnz sub3_l5
+bnz generateslotwithnewseed_3_l5
 load 15
 int 2
 ==
-bnz sub3_l4
+bnz generateslotwithnewseed_3_l4
 err
-sub3_l4:
+generateslotwithnewseed_3_l4:
 load 13
-int 0
-int 64
-extract3
+extract 0 64
 load 14
 concat
-b sub3_l7
-sub3_l5:
+b generateslotwithnewseed_3_l7
+generateslotwithnewseed_3_l5:
 load 13
-int 0
-int 32
-extract3
+extract 0 32
 load 14
 concat
 load 13
-int 64
-int 32
-extract3
+extract 64 32
 concat
-b sub3_l7
-sub3_l6:
+b generateslotwithnewseed_3_l7
+generateslotwithnewseed_3_l6:
 load 14
 load 13
-int 32
-int 64
-extract3
+extract 32 64
 concat
-sub3_l7:
+generateslotwithnewseed_3_l7:
 retsub
-sub4: // update_last_round
+
+// update_last_round
+updatelastround_4:
 store 4
 byte ""
 load 4
 byte ""
 app_global_get
-int 8
-int 64
-extract3
+extract 8 64
 concat
 app_global_put
 retsub
-sub5: // validate_vrf
+
+// validate_vrf
+validatevrf_5:
 store 9
 store 8
 store 7
@@ -255,11 +246,13 @@ load 9
 ed25519verify
 assert
 retsub
-sub6: // store_vrf
+
+// store_vrf
+storevrf_6:
 store 11
 store 10
 load 10
-callsub sub1
+callsub getslotfromround_1
 store 12
 load 12
 load 12
@@ -267,21 +260,23 @@ app_global_get
 load 11
 sha512_256
 load 10
-callsub sub2
-callsub sub3
+callsub getseedindexfromround_2
+callsub generateslotwithnewseed_3
 app_global_put
 retsub
-sub7: // init_global_state
+
+// init_global_state
+initglobalstate_7:
 store 18
 store 17
 store 16
 load 16
 store 19
-sub7_l1:
+initglobalstate_7_l1:
 load 19
 load 17
 <
-bz sub7_l3
+bz initglobalstate_7_l3
 load 19
 itob
 load 18
@@ -290,6 +285,6 @@ load 19
 int 1
 +
 store 19
-b sub7_l1
-sub7_l3:
+b initglobalstate_7_l1
+initglobalstate_7_l3:
 retsub

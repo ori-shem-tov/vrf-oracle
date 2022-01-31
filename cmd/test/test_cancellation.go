@@ -2,6 +2,7 @@ package test
 
 import (
 	"context"
+
 	"github.com/algorand/go-algorand-sdk/crypto"
 	"github.com/algorand/go-algorand-sdk/future"
 	"github.com/algorand/go-algorand-sdk/mnemonic"
@@ -16,11 +17,11 @@ func init() {
 
 	cancelCmd.Flags().Uint64Var(&appID, "app-id", 0,
 		"Game app ID")
-	daemon.MarkFlagRequired(cancelCmd.Flags(), "app-id")
+	cancelCmd.MarkFlagRequired("app-id")
 
 	cancelCmd.Flags().StringVar(&requesterMnemonic, "requester-mnemonic", "",
 		"25-word mnemonic of the requester")
-	daemon.MarkFlagRequired(cancelCmd.Flags(), "requester-mnemonic")
+	cancelCmd.MarkFlagRequired("requester-mnemonic")
 }
 
 var cancelCmd = &cobra.Command{
@@ -32,7 +33,7 @@ var cancelCmd = &cobra.Command{
 			log.Error(err)
 			return
 		}
-		algodClient, _, err := daemon.InitClients(daemon.AlgodAddress, daemon.AlgodToken, daemon.IndexerAddress, daemon.IndexerToken)
+		algodClient, err := daemon.InitClients(daemon.AlgodAddress, daemon.AlgodToken)
 		if err != nil {
 			log.Error(err)
 			return
@@ -93,4 +94,3 @@ var cancelCmd = &cobra.Command{
 		log.Infof("sent %s", txID)
 	},
 }
-

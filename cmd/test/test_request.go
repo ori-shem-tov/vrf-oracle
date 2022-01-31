@@ -4,9 +4,15 @@ import (
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
+	"encoding/base64"
 	"encoding/binary"
 	"encoding/hex"
 	"fmt"
+	"io/ioutil"
+	"os"
+	"strings"
+
+	"github.com/algorand/go-algorand-sdk/client/v2/common/models"
 	"github.com/algorand/go-algorand-sdk/crypto"
 	"github.com/algorand/go-algorand-sdk/future"
 	"github.com/algorand/go-algorand-sdk/mnemonic"
@@ -15,16 +21,13 @@ import (
 	"github.com/ori-shem-tov/vrf-oracle/cmd/daemon"
 	log "github.com/sirupsen/logrus"
 	"github.com/spf13/cobra"
-	"io/ioutil"
-	"os"
-	"strings"
 )
 
 var (
-	appID                    uint64
-	requesterMnemonic		 string
-	block                    uint64
-	fee						 uint64
+	appID             uint64
+	requesterMnemonic string
+	block             uint64
+	fee               uint64
 )
 
 func init() {
@@ -32,15 +35,15 @@ func init() {
 
 	requestCmd.Flags().Uint64Var(&appID, "app-id", 0,
 		"Game app ID")
-	daemon.MarkFlagRequired(requestCmd.Flags(), "app-id")
+	requestCmd.MarkFlagRequired("app-id")
 
 	requestCmd.Flags().StringVar(&requesterMnemonic, "requester-mnemonic", "",
 		"25-word mnemonic of the requester")
-	daemon.MarkFlagRequired(requestCmd.Flags(), "requester-mnemonic")
+	requestCmd.MarkFlagRequired("requester-mnemonic")
 
 	requestCmd.Flags().Uint64Var(&block, "block", 0,
 		"the block to take the seed for the VRF input")
-	daemon.MarkFlagRequired(requestCmd.Flags(), "block")
+	requestCmd.MarkFlagRequired("block")
 }
 
 func testRequestArguments() (ed25519.PrivateKey, types.Address, error) {
@@ -150,7 +153,7 @@ var requestCmd = &cobra.Command{
 			log.Error(err)
 			return
 		}
-		algodClient, _, err := daemon.InitClients(daemon.AlgodAddress, daemon.AlgodToken, daemon.IndexerAddress, daemon.IndexerToken)
+		algodClient, err := daemon.InitClients(daemon.AlgodAddress, daemon.AlgodToken)
 		if err != nil {
 			log.Error(err)
 			return
@@ -172,7 +175,7 @@ var requestCmd = &cobra.Command{
 			return
 		}
 
-		feeStateValue, ok := daemon.GetFromState([]byte("service_fee"), appObject.Params.GlobalState)
+		feeStateValue, ok := GetFromState([]byte("service_fee"), appObject.Params.GlobalState)
 		if !ok {
 			log.Errorf("app %d doesn't have \"service_fee\" key", appID)
 			return
@@ -215,7 +218,6 @@ var requestCmd = &cobra.Command{
 			}
 		}
 
-
 		//signedGroup, err := generateRequestTxnGroup(requesterSK, appEscrow, suggestedParams, feeStateValue.Uint, block, appID)
 		//
 		//txID, err := algodClient.SendRawTransaction(signedGroup).Do(context.Background())
@@ -233,3 +235,12 @@ var requestCmd = &cobra.Command{
 	},
 }
 
+func GetFromState(key []byte, state []models.TealKeyValue) (models.TealValue, bool) {
+	kB64 := base64.StdEncoding.EncodeToString(key)
+	for _, kv := range state {
+		if kv.Key == kB64 {
+			return kv.Value, true
+		}
+	}
+	return models.TealValue{}, false
+}

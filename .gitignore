@@ -17,3 +17,7 @@
 *.idea/
 copies
 libs
+
+
+# Config file should only be used locally, has mnemonics 
+config.json

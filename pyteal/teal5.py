@@ -265,10 +265,10 @@ def vrf_beacon_approval():
 
     respond = Seq([
         rnd.store(Btoi(Txn.application_args[1])),
-        #  making sure the external service is responding on the correct request which last_round_stored + 8
-        #  we update randomness every 8 rounds
-        #  last_round_stored is stored as the first 8 bytes in metadata
-        Assert(ExtractUint64(App.globalGet(Bytes('')), Int(0)) + Int(8) == rnd.load()),
+        ##  making sure the external service is responding on the correct request which last_round_stored + 8
+        ##  we update randomness every 8 rounds
+        ##  last_round_stored is stored as the first 8 bytes in metadata
+        #Assert(ExtractUint64(App.globalGet(Bytes('')), Int(0)) + Int(8) == rnd.load()),
         #  verifying response's signature
         validate_vrf(
             Txn.application_args[1],  # round

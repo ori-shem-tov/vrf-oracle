@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"fmt"
+
 	"github.com/algorand/go-algorand-sdk/client/v2/algod"
 	"github.com/algorand/go-algorand-sdk/client/v2/common/models"
 	"github.com/algorand/go-algorand-sdk/crypto"
@@ -18,25 +19,25 @@ import (
 )
 
 var (
-	oraclePKAddressString string
+	oraclePKAddressString    string
 	oracleOwnerAddressString string
 )
 
 func init() {
 	daemon.SetLogger()
-	
+
 	EndToEndCmd.Flags().StringVar(&oraclePKAddressString, "oracle-pk", "",
 		"an Algorand address representation of the oracle's PK")
-	daemon.MarkFlagRequired(EndToEndCmd.Flags(), "oracle-pk")
+	EndToEndCmd.MarkFlagRequired("oracle-pk")
 
 	EndToEndCmd.Flags().StringVar(&oracleOwnerAddressString, "oracle-owner", "",
 		"the oracle owner address")
-	daemon.MarkFlagRequired(EndToEndCmd.Flags(), "oracle-owner")
+	EndToEndCmd.MarkFlagRequired("oracle-owner")
 }
 
 const (
 	requiredFundingAlgosPerAccount = 10
-	requiredFundingAlgos = 5 * requiredFundingAlgosPerAccount + 1
+	requiredFundingAlgos           = 5*requiredFundingAlgosPerAccount + 1
 )
 
 func waitForTx(algodClient *algod.Client, txID string) (models.PendingTransactionInfoResponse, error) {
