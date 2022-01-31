@@ -2,7 +2,9 @@ package daemon
 
 import (
 	"context"
+	"encoding/base64"
 	"fmt"
+	"io/ioutil"
 	"os"
 	"strings"
 
@@ -27,6 +29,8 @@ var (
 
 	startingRound      uint64 // the round from which the daemon starts scanning
 	writeBlockInterval uint64 // the number of rounds to wait before writing again
+
+	configFile string // The config file to read settings from
 
 	AlgodAddress = os.Getenv("AF_ALGOD_ADDRESS")
 	AlgodToken   = os.Getenv("AF_ALGOD_TOKEN")
@@ -74,6 +78,9 @@ func init() {
 
 	RunDaemonCmd.Flags().Uint64Var(&startingRound, "write-interval", 8,
 		"number of blocks to wait before writing again")
+
+	RunFromConfig.Flags().StringVar(&configFile, "config", "", "JSON Config file to use")
+	RunFromConfig.MarkFlagRequired("config")
 }
 
 func InitClients(algodAddress, algodToken string) (*algod.Client, error) {
@@ -121,6 +128,36 @@ func getStartingRound(algodClient *algod.Client, inputRound uint64) (uint64, err
 	return status.LastRound, nil
 }
 
+func compileTeal(algodClient *algod.Client, approvalProgramFilename, clearProgramFilename string) ([]byte, []byte, error) {
+	approval, err := ioutil.ReadFile(approvalProgramFilename)
+	if err != nil {
+		return nil, nil, err
+	}
+	clear, err := ioutil.ReadFile(clearProgramFilename)
+	if err != nil {
+		return nil, nil, err
+	}
+	compiledApprovalObject, err := algodClient.TealCompile(approval).Do(context.Background())
+	if err != nil {
+		return nil, nil, err
+	}
+	compiledClearObject, err := algodClient.TealCompile(clear).Do(context.Background())
+	if err != nil {
+		return nil, nil, err
+	}
+
+	compiledApprovalBytes, err := base64.StdEncoding.DecodeString(compiledApprovalObject.Result)
+	if err != nil {
+		return nil, nil, err
+	}
+	compiledClearBytes, err := base64.StdEncoding.DecodeString(compiledClearObject.Result)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	return compiledApprovalBytes, compiledClearBytes, nil
+}
+
 var RunDaemonCmd = &cobra.Command{
 	Use:   "run-daemon",
 	Short: "runs the daemon",
@@ -161,15 +198,47 @@ var RunDaemonCmd = &cobra.Command{
 		}
 		startingRound = (startingRound / writeBlockInterval) * writeBlockInterval
 
+		approvalBytes, clearBytes, err := compileTeal(algodClient, approvalProgramFilename, clearProgramFilename)
+		if err != nil {
+			log.Fatalf("Failed to compile programs: %+v", err)
+		}
+
 		vrfd := daemon.New(
 			algodClient,
 			signerAcct, vrfAcct, appAcct, serviceAcct,
 			writeBlockInterval, startingRound,
-			approvalProgramFilename, clearProgramFilename,
+			approvalBytes, clearBytes,
 		)
 
 		log.Infof("creating applications...")
 		vrfd.CreateApplications()
+
+		log.Info("running...")
+		vrfd.Start()
+	},
+}
+
+var RunFromConfig = &cobra.Command{
+	Use:   "run",
+	Short: "runs the daemon with a config",
+	Run: func(cmd *cobra.Command, args []string) {
+		log.Infof("reading config %s", configFile)
+		vrfd := daemon.NewFromConfig(configFile)
+
+		if vrfd.CurrentRound == 0 {
+			start, err := getStartingRound(vrfd.AlgodClient, 0)
+			if err != nil {
+				log.Fatalf("Failed to get start round: %+v", err)
+			}
+			vrfd.CurrentRound = start
+		}
+
+		if vrfd.AppID == 0 {
+			log.Infof("creating applications...")
+			vrfd.CreateApplications()
+		} else {
+			log.Infof("using app id %d", vrfd.AppID)
+		}
 
 		log.Info("running...")
 		vrfd.Start()

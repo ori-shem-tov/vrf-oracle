@@ -8,7 +8,6 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
-	"io/ioutil"
 	"os"
 	"time"
 
@@ -30,8 +29,8 @@ var (
 type VRFDaemon struct {
 	AlgodClient *algod.Client // Client used to interact with the chain
 
-	ApprovalSourceFile string
-	ClearSourceFile    string
+	ApprovalBytes []byte
+	ClearBytes    []byte
 
 	DummyAppID  uint64        // Dummy app used to increase budget
 	AppID       uint64        // Application that validates and stores randomness
@@ -83,23 +82,25 @@ func NewFromConfig(path string) *VRFDaemon {
 		log.Fatalf("Failed to parse service: %+v", err)
 	}
 
-	appHashAddr := types.Address{}
-	if conf.AppHash != "" {
-		appHashAddr, err = types.DecodeAddress(conf.AppHash)
-		if err != nil {
-			log.Fatalf("Failed to decodeAddress")
-		}
+	approval, err := base64.StdEncoding.DecodeString(conf.ApprovalSource)
+	if err != nil {
+		log.Fatalf("Failed to decode approval program: %+v", err)
+	}
+
+	clear, err := base64.StdEncoding.DecodeString(conf.ClearSource)
+	if err != nil {
+		log.Fatalf("Failed to decode clear program: %+v", err)
 	}
 
 	return &VRFDaemon{
 		AlgodClient: client,
 
-		ApprovalSourceFile: conf.ApprovalSource,
-		ClearSourceFile:    conf.ClearSource,
+		ApprovalBytes: approval,
+		ClearBytes:    clear,
 
 		DummyAppID:  uint64(conf.DummyAppID),
 		AppID:       uint64(conf.AppID),
-		AppHashAddr: appHashAddr,
+		AppHashAddr: crypto.AddressFromProgram(approval),
 
 		WriteInterval: uint64(conf.WriteInterval),
 		CurrentRound:  uint64(conf.Start),
@@ -112,12 +113,13 @@ func NewFromConfig(path string) *VRFDaemon {
 }
 
 // New returns a pointer to a VRFDaemon, you should call `CreateApplications` (if necessary) and `Start` to kick it off
-func New(client *algod.Client, signer, vrf, app, service crypto.Account, writeInterval, roundStart uint64, approval, clear string) *VRFDaemon {
+func New(client *algod.Client, signer, vrf, app, service crypto.Account, writeInterval, roundStart uint64, approval, clear []byte) *VRFDaemon {
 	return &VRFDaemon{
 		AlgodClient: client,
 
-		ApprovalSourceFile: approval,
-		ClearSourceFile:    clear,
+		ApprovalBytes: approval,
+		ClearBytes:    clear,
+		AppHashAddr:   crypto.AddressFromProgram(approval),
 
 		Signer:         signer,
 		VRF:            vrf,
@@ -300,12 +302,6 @@ func (v *VRFDaemon) createOracleApp() (uint64, error) {
 		return 0, fmt.Errorf("failed to get suggested params: %+v", err)
 	}
 
-	approvalBytes, clearBytes, err := compileTeal(v.AlgodClient, v.ApprovalSourceFile, v.ClearSourceFile)
-	if err != nil {
-		return 0, fmt.Errorf("failed to compile teal: %+v", err)
-	}
-	v.AppHashAddr = crypto.AddressFromProgram(approvalBytes)
-
 	block, err := getBlock(v.AlgodClient, v.CurrentRound)
 	if err != nil {
 		return 0, fmt.Errorf("failed to get block seed of block %d from algod", v.CurrentRound)
@@ -327,7 +323,7 @@ func (v *VRFDaemon) createOracleApp() (uint64, error) {
 	}
 
 	appCall, err := future.MakeApplicationCreateTx(
-		false, approvalBytes, clearBytes, globalStateSchema, localStateSchema, args,
+		false, v.ApprovalBytes, v.ClearBytes, globalStateSchema, localStateSchema, args,
 		nil, nil, nil, sp, v.AppCreator.Address, nil, types.Digest{}, [32]byte{}, types.ZeroAddress,
 	)
 	if err != nil {
@@ -407,36 +403,6 @@ func (v *VRFDaemon) createDummyApp() (uint64, error) {
 	}
 
 	return res.ApplicationIndex, nil
-}
-
-func compileTeal(algodClient *algod.Client, approvalProgramFilename, clearProgramFilename string) ([]byte, []byte, error) {
-	approval, err := ioutil.ReadFile(approvalProgramFilename)
-	if err != nil {
-		return nil, nil, err
-	}
-	clear, err := ioutil.ReadFile(clearProgramFilename)
-	if err != nil {
-		return nil, nil, err
-	}
-	compiledApprovalObject, err := algodClient.TealCompile(approval).Do(context.Background())
-	if err != nil {
-		return nil, nil, err
-	}
-	compiledClearObject, err := algodClient.TealCompile(clear).Do(context.Background())
-	if err != nil {
-		return nil, nil, err
-	}
-
-	compiledApprovalBytes, err := base64.StdEncoding.DecodeString(compiledApprovalObject.Result)
-	if err != nil {
-		return nil, nil, err
-	}
-	compiledClearBytes, err := base64.StdEncoding.DecodeString(compiledClearObject.Result)
-	if err != nil {
-		return nil, nil, err
-	}
-
-	return compiledApprovalBytes, compiledClearBytes, nil
 }
 
 func getBlock(a *algod.Client, round uint64) (types.Block, error) {
