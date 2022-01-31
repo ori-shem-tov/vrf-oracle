@@ -6,8 +6,10 @@ import (
 	"crypto/sha512"
 	"encoding/base64"
 	"encoding/binary"
+	"encoding/json"
 	"fmt"
 	"io/ioutil"
+	"os"
 	"time"
 
 	"github.com/algorand/go-algorand-sdk/client/v2/algod"
@@ -42,6 +44,71 @@ type VRFDaemon struct {
 	VRF            crypto.Account // Generates VRF output
 	AppCreator     crypto.Account // Creates application
 	ServiceAccount crypto.Account // Sends updates
+}
+
+func NewFromConfig(path string) *VRFDaemon {
+	b, err := os.ReadFile(path)
+	if err != nil {
+		log.Fatalf("Failed to read file %s:  %+v", path, err)
+	}
+
+	conf := &Config{}
+	if err := json.Unmarshal(b, conf); err != nil {
+		log.Fatalf("Failed to unmarshal json: %+v", err)
+	}
+
+	client, err := algod.MakeClient(fmt.Sprintf("%s:%d", conf.AlgodHost, conf.AlgodPort), conf.AlgodToken)
+	if err != nil {
+		log.Fatalf("Failed to make client: %+v", err)
+	}
+
+	// Setup accounts
+	signer, err := AccountFromString(conf.Signer)
+	if err != nil {
+		log.Fatalf("Failed to parse signer: %+v", err)
+	}
+
+	vrf, err := AccountFromString(conf.VRF)
+	if err != nil {
+		log.Fatalf("Failed to parse vrf: %+v", err)
+	}
+
+	creator, err := AccountFromString(conf.Creator)
+	if err != nil {
+		log.Fatalf("Failed to parse creator: %+v", err)
+	}
+
+	service, err := AccountFromString(conf.Service)
+	if err != nil {
+		log.Fatalf("Failed to parse service: %+v", err)
+	}
+
+	appHashAddr := types.Address{}
+	if conf.AppHash != "" {
+		appHashAddr, err = types.DecodeAddress(conf.AppHash)
+		if err != nil {
+			log.Fatalf("Failed to decodeAddress")
+		}
+	}
+
+	return &VRFDaemon{
+		AlgodClient: client,
+
+		ApprovalSourceFile: conf.ApprovalSource,
+		ClearSourceFile:    conf.ClearSource,
+
+		DummyAppID:  uint64(conf.DummyAppID),
+		AppID:       uint64(conf.AppID),
+		AppHashAddr: appHashAddr,
+
+		WriteInterval: uint64(conf.WriteInterval),
+		CurrentRound:  uint64(conf.Start),
+
+		Signer:         signer,
+		VRF:            vrf,
+		AppCreator:     creator,
+		ServiceAccount: service,
+	}
 }
 
 // New returns a pointer to a VRFDaemon, you should call `CreateApplications` (if necessary) and `Start` to kick it off
