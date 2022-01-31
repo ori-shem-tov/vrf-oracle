@@ -164,28 +164,28 @@ func (v *VRFDaemon) CreateApplications() error {
 // If it finds a new round and the round is one we should write for
 // it creates a new vrf and sends a transaction to update the state of the application
 func (v *VRFDaemon) Start() {
-	v.CurrentRound += v.WriteInterval
-
 	for {
 		sleepTime := time.Duration(waitBetweenBlocksMS) * time.Millisecond
 		log.Debugf("sleeping %v", sleepTime)
 
 		time.Sleep(sleepTime)
 
-		log.Infof("getting block seed for %d", v.CurrentRound)
-		block, err := getBlock(v.AlgodClient, v.CurrentRound)
+		log.Infof("getting block seed for %d", v.CurrentRound+1)
+		block, err := getBlock(v.AlgodClient, v.CurrentRound+1)
 		if err != nil {
-			log.Errorf("error getting block seed of block %d from algod", v.CurrentRound)
+			log.Errorf("error getting block %d from algod: %+v", v.CurrentRound, err)
 			continue
 		}
 
-		if block.Round <= types.Round(v.CurrentRound) {
+		if block.Round < types.Round(v.CurrentRound) {
 			// We already saw this
 			continue
 		}
 
 		if uint64(block.Round)%v.WriteInterval != 0 {
 			// We only want to write on the interval specified
+			// but we should update regardless to make sure we request the next block
+			v.CurrentRound = uint64(block.Round)
 			continue
 		}
 
@@ -304,7 +304,7 @@ func (v *VRFDaemon) createOracleApp() (uint64, error) {
 
 	block, err := getBlock(v.AlgodClient, v.CurrentRound)
 	if err != nil {
-		return 0, fmt.Errorf("failed to get block seed of block %d from algod", v.CurrentRound)
+		return 0, fmt.Errorf("failed to get block %d from algod: %+v", v.CurrentRound, err)
 	}
 
 	signedVrfOutput, vrfOutput, err := v.ComputeAndSignVRFForRound(block)
@@ -405,9 +405,9 @@ func (v *VRFDaemon) createDummyApp() (uint64, error) {
 	return res.ApplicationIndex, nil
 }
 
-func getBlock(a *algod.Client, round uint64) (types.Block, error) {
-	block, err := a.Block(round).Do(context.Background())
-	return block, err
+func getBlock(a *algod.Client, round uint64) (block types.Block, err error) {
+	block, err = a.Block(round).Do(context.Background())
+	return
 }
 
 func getVrfPrivateKey(key ed25519.PrivateKey) libsodium_wrapper.VrfPrivkey {
