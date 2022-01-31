@@ -150,7 +150,7 @@ func (v *VRFDaemon) CreateApplications() error {
 	}
 	v.DummyAppID = dummyAppID
 
-	log.Info("creating oracle app")
+	log.Info("creating oracle app...")
 	appIdx, err := v.createOracleApp()
 	if err != nil {
 		return fmt.Errorf("failed to create oracle app: %+v", err)

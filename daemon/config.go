@@ -30,7 +30,8 @@ type Config struct {
 
 func AccountFromString(secret string) (acct crypto.Account, err error) {
 	if !strings.Contains(secret, " ") {
-		//Its a b64 encoded one, TODO
+		//TODO: Its a b64 encoded one, decode it and create the acct
+		return
 	}
 
 	pk, err := mnemonic.ToPrivateKey(secret)
