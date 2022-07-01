@@ -2,13 +2,11 @@ package main
 
 import (
 	"github.com/ori-shem-tov/vrf-oracle/cmd/daemon"
-	"github.com/ori-shem-tov/vrf-oracle/cmd/test"
 	"github.com/spf13/cobra"
 )
 
 func init() {
 	rootCmd.AddCommand(daemon.RunDaemonCmd)
-	rootCmd.AddCommand(test.TestCmd)
 }
 
 var rootCmd = &cobra.Command{
@@ -19,7 +17,6 @@ var rootCmd = &cobra.Command{
 		cmd.HelpFunc()(cmd, args)
 	},
 }
-
 
 func main() {
 	err := rootCmd.Execute()

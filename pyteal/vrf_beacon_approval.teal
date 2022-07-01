@@ -1,4 +1,4 @@
-#pragma version 5
+#pragma version 7
 txn ApplicationID
 int 0
 ==
@@ -48,17 +48,19 @@ load 0
 ==
 assert
 txna ApplicationArgs 1
-txna ApplicationArgs 2
+dup
+btoi
+block BlkSeed
 txna ApplicationArgs 3
 txna ApplicationArgs 4
 byte ""
 app_global_get
-int 8
+int 40
 int 32
 extract3
 callsub sub5
 load 0
-txna ApplicationArgs 3
+swap
 callsub sub6
 txna ApplicationArgs 1
 callsub sub4
@@ -131,10 +133,12 @@ int 32
 ==
 assert
 txna ApplicationArgs 0
-txna ApplicationArgs 3
+dup
+btoi
+block BlkSeed
 txna ApplicationArgs 4
 txna ApplicationArgs 5
-txna ApplicationArgs 1
+txna ApplicationArgs 2
 callsub sub5
 int 0
 int 63
@@ -142,7 +146,7 @@ byte "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
 callsub sub7
 txna ApplicationArgs 0
 btoi
-txna ApplicationArgs 4
+swap
 callsub sub6
 byte ""
 txna ApplicationArgs 0
@@ -248,11 +252,10 @@ store 5
 load 5
 load 6
 concat
+sha512_256
 load 7
-concat
-load 8
 load 9
-ed25519verify
+vrf_verify VrfAlgorand
 assert
 retsub
 sub6: // store_vrf

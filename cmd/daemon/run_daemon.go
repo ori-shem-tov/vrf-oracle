@@ -10,7 +10,6 @@ import (
 	"fmt"
 	"github.com/algorand/go-algorand-sdk/client/v2/algod"
 	"github.com/algorand/go-algorand-sdk/client/v2/common/models"
-	"github.com/algorand/go-algorand-sdk/client/v2/indexer"
 	"github.com/algorand/go-algorand-sdk/crypto"
 	"github.com/algorand/go-algorand-sdk/future"
 	"github.com/algorand/go-algorand-sdk/transaction"
@@ -34,19 +33,18 @@ var (
 	appCreatorMnemonic      string
 	approvalProgramFilename string
 	clearProgramFilename    string
-	signingMnemonicString     string // the mnemonic for signing vrf responses
-	vrfMnemonicString         string // the mnemonic for generating the vrf
-	serviceMnemonicString     string // the mnemonic for the service account (used to send responses to the smart-contract)
-	startingRound             uint64  // the round from which the daemon starts scanning
-	AlgodAddress              = os.Getenv("AF_ALGOD_ADDRESS")
-	AlgodToken                = os.Getenv("AF_ALGOD_TOKEN")
-	IndexerAddress            = os.Getenv("AF_IDX_ADDRESS")
-	IndexerToken              = os.Getenv("AF_IDX_TOKEN")
-	logLevelEnv               = strings.ToLower(os.Getenv("VRF_LOG_LEVEL"))
+	signingMnemonicString   string // the mnemonic for signing vrf responses
+	vrfMnemonicString       string // the mnemonic for generating the vrf
+	serviceMnemonicString   string // the mnemonic for the service account (used to send responses to the smart-contract)
+	startingRound           uint64 // the round from which the daemon starts scanning
+	AlgodAddress            = os.Getenv("AF_ALGOD_ADDRESS")
+	AlgodToken              = os.Getenv("AF_ALGOD_TOKEN")
+	logLevelEnv             = strings.ToLower(os.Getenv("VRF_LOG_LEVEL"))
 )
 
 const (
 	waitBetweenBlocksMS = 4500
+	numOfDummyTxns      = 10
 )
 
 func MarkFlagRequired(flag *pflag.FlagSet, name string) {
@@ -85,13 +83,13 @@ func init() {
 	RunDaemonCmd.Flags().Uint64Var(&startingRound, "round", 0,
 		"the round to start scanning from (optional. default: current round)")
 
-	RunDaemonCmd.Flags().StringVar(&appCreatorMnemonic, "app-creator-mnemonic", "", "25-word mnemonic of the app creator")
+	RunDaemonCmd.Flags().StringVar(&appCreatorMnemonic, "app-creator-mnemonic", "", "25-word mnemonic of the app creator (required)")
 	MarkFlagRequired(RunDaemonCmd.Flags(), "app-creator-mnemonic")
 
-	RunDaemonCmd.Flags().StringVar(&approvalProgramFilename, "approval-program", "", "TEAL script of the approval program")
+	RunDaemonCmd.Flags().StringVar(&approvalProgramFilename, "approval-program", "", "TEAL script of the approval program (required)")
 	MarkFlagRequired(RunDaemonCmd.Flags(), "approval-program")
 
-	RunDaemonCmd.Flags().StringVar(&clearProgramFilename, "clear-program", "", "TEAL script of the clear program")
+	RunDaemonCmd.Flags().StringVar(&clearProgramFilename, "clear-program", "", "TEAL script of the clear program (required)")
 	MarkFlagRequired(RunDaemonCmd.Flags(), "clear-program")
 
 }
@@ -133,7 +131,8 @@ func buildAnswerPhaseTransactionsGroup(appID, dummyAppID uint64, serviceAccount 
 	if err != nil {
 		return nil, fmt.Errorf("failed creating app call: %v", err)
 	}
-	numOfDummyTxns := 4
+	appCall.FirstValid = types.Round(vrfRequest.BlockNumber + 1)
+	appCall.LastValid = appCall.FirstValid + 1000
 	appCall.Fee *= types.MicroAlgos(1 + numOfDummyTxns)
 	appCalls := []types.Transaction{appCall}
 	for i := 0; i < numOfDummyTxns; i++ {
@@ -180,7 +179,7 @@ func getVrfPrivateKey(key ed25519.PrivateKey) libsodium_wrapper.VrfPrivkey {
 }
 
 // concat the block number with the block seed and the user seed and hash to create the input to the VRF
-func buildVrfInput(blockNumber, blockSeed  []byte) [sha512.Size256]byte {
+func buildVrfInput(blockNumber, blockSeed []byte) [sha512.Size256]byte {
 	toHash := append(blockNumber, blockSeed...)
 	return sha512.Sum512_256(toHash)
 }
@@ -204,7 +203,9 @@ func computeAndSignVrf(blockNumber, blockSeed []byte, appApprovalHashAddress typ
 	if err != nil {
 		return types.Signature{}, []byte{}, fmt.Errorf("error signing vrf output")
 	}
-	return sig, vrfOutput[:], nil
+	//verif, out := vrfPrivateKey.Pubkey().Verify(proof, rawMessage(vrfInput[:]))
+	//log.Debugf("verified %v, out %v, pub %v, data %v, proof %v", verif, out, vrfPrivateKey.Pubkey(), vrfInput, proof)
+	return sig, proof[:], nil
 }
 
 // handles requests for the current round: computes the VRF output and sends it to the smart-contract
@@ -272,12 +273,12 @@ func getSuggestedParams(algodClient *algod.Client) (types.SuggestedParams, error
 }
 
 // getting a block with exponential back-off
-func getBlock(indexerClient *indexer.Client, round uint64) (models.Block, error) {
-	var block models.Block
+func getBlock(algodClient *algod.Client, round uint64) (types.Block, error) {
+	var block types.Block
 	err := tools.Retry(1, 5,
 		func() error {
 			var err error
-			block, err = indexerClient.LookupBlock(round).Do(context.Background())
+			block, err = algodClient.Block(round).Do(context.Background())
 			return err
 		},
 		func(err error) {
@@ -290,7 +291,7 @@ func getBlock(indexerClient *indexer.Client, round uint64) (models.Block, error)
 // extracts the VRF requests from the heap to handle in the current round
 func getVrfRequestsToHandle(h *tools.VrfRequestsHeap, currentRound uint64) []models2.VrfRequest {
 	var result []models2.VrfRequest
-	for{
+	for {
 		if len(*h) < 1 {
 			break
 		}
@@ -330,41 +331,8 @@ func buildVrfRequestFromAppCall(txn models.Transaction) (models2.VrfRequest, err
 	return result, nil
 }
 
-// sanity check the app call is valid
-func validateTransaction(transaction models.Transaction, currentRound uint64) (models2.VrfRequest, error) {
-	vrfRequest, err := buildVrfRequestFromAppCall(transaction)
-	if err != nil {
-		return vrfRequest, err
-	}
-
-	if currentRound >= vrfRequest.BlockNumber {
-		return vrfRequest, fmt.Errorf("block number is not in the future")
-	}
-
-	return vrfRequest, nil
-}
-
-func removeRequestFromHeap(h *tools.VrfRequestsHeap, sender string) {
-	indexToRemove := -1
-	for i := range *h {
-		if (*h)[i].Sender.String() == sender {
-			indexToRemove = i
-			break
-		}
-	}
-	if indexToRemove != -1 {
-		removed := heap.Remove(h, indexToRemove).(models2.VrfRequest)
-		if removed.Sender.String() != sender {
-			// sanity
-			heap.Push(h, removed)
-			log.Fatalf("intended to remove request of %s but instead removed %s", sender, removed.Sender)
-		}
-		log.Debugf("removed request from %s of round %d from heap", removed.Sender, removed.BlockNumber)
-	}
-}
-
 func storeRequestsInHeap(h *tools.VrfRequestsHeap, currentRound uint64) {
-	if currentRound % 8 == 0 {
+	if currentRound%8 == 0 {
 		blockNumberBytes := make([]byte, 8)
 		binary.BigEndian.PutUint64(blockNumberBytes, currentRound)
 		heap.Push(h, models2.VrfRequest{
@@ -375,28 +343,6 @@ func storeRequestsInHeap(h *tools.VrfRequestsHeap, currentRound uint64) {
 		})
 		log.Debugf("adding request for round %d", currentRound)
 	}
-}
-
-func getTransactionsFromIndexer(indexerClient *indexer.Client, round, appID uint64) (models.TransactionsResponse,
-	error) {
-	var transactionsResponse models.TransactionsResponse
-	err := tools.Retry(1, 5,
-		func() error {
-			var err error
-			transactionsResponse, err = indexerClient.SearchForTransactions().
-				Round(round).
-				ApplicationId(appID).
-				Do(context.Background())
-			if err == nil && transactionsResponse.CurrentRound < round {
-				return fmt.Errorf("%d not available yet, got %d: %v", round, transactionsResponse.CurrentRound, err)
-			}
-			return err
-		},
-		func(err error) {
-			log.Warnf("can't retrieve block %d, trying again...: %v", round, err)
-		},
-	)
-	return transactionsResponse, err
 }
 
 func sendDummyTxn(algodClient *algod.Client, serviceAccount crypto.Account) {
@@ -428,7 +374,7 @@ func sendDummyTxn(algodClient *algod.Client, serviceAccount crypto.Account) {
 }
 
 func generateSignedAppCreate(approvalBytes, clearBytes []byte, globalState, localState types.StateSchema,
-	appCreatorSK ed25519.PrivateKey, args [][]byte, sp types.SuggestedParams, dummyAppID uint64) ([]byte, error) {
+	appCreatorSK ed25519.PrivateKey, args [][]byte, sp types.SuggestedParams, startingRound, dummyAppID uint64) ([]byte, error) {
 	sender, err := crypto.GenerateAddressFromSK(appCreatorSK)
 	if err != nil {
 		return nil, err
@@ -453,8 +399,10 @@ func generateSignedAppCreate(approvalBytes, clearBytes []byte, globalState, loca
 	if err != nil {
 		return nil, err
 	}
+	appCall.FirstValid = types.Round(startingRound + 1)
+	appCall.LastValid = appCall.FirstValid + 1000
 	appCalls := []types.Transaction{appCall}
-	for i := 0; i < 4; i++ {
+	for i := 0; i < numOfDummyTxns; i++ {
 		dummyAppCall, err := future.MakeApplicationNoOpTx(
 			dummyAppID,
 			nil,
@@ -561,20 +509,20 @@ func createDummyApp(approvalProgram []byte, appCreatorSK ed25519.PrivateKey, alg
 	return res.ApplicationIndex, nil
 }
 
-func createApp(startingRound, dummyAppID uint64, algodClient *algod.Client, indexerClient *indexer.Client,
-	appApprovalHashAddr types.Address, signingPrivateKey, vrfPrivateKey, appCreatorPrivateKey ed25519.PrivateKey,
-	approvalBytes, clearBytes []byte, suggestedParams types.SuggestedParams) (uint64, error) {
+func createApp(startingRound, dummyAppID uint64, algodClient *algod.Client, appApprovalHashAddr types.Address,
+	signingPrivateKey, vrfPrivateKey, appCreatorPrivateKey ed25519.PrivateKey, approvalBytes, clearBytes []byte,
+	suggestedParams types.SuggestedParams) (uint64, error) {
 	log.Infof("getting block seed for %d", startingRound)
-	block, err := getBlock(indexerClient, startingRound)
+	block, err := getBlock(algodClient, startingRound)
 	if err != nil {
-		return 0, fmt.Errorf("error getting block seed of block %d from indexer", startingRound)
+		return 0, fmt.Errorf("error getting block seed of block %d from algod", startingRound)
 	}
 
 	blockNumberBytes := make([]byte, 8)
 	binary.BigEndian.PutUint64(blockNumberBytes, startingRound)
 	signedVrfOutput, vrfOutput, err := computeAndSignVrf(
 		blockNumberBytes,
-		block.Seed,
+		block.Seed[:],
 		appApprovalHashAddr,
 		signingPrivateKey,
 		vrfPrivateKey,
@@ -595,13 +543,29 @@ func createApp(startingRound, dummyAppID uint64, algodClient *algod.Client, inde
 		blockNumberBytes,
 		signingPrivateKey[32:],
 		vrfPrivateKey[32:],
-		block.Seed,
+		block.Seed[:],
 		vrfOutput,
 		signedVrfOutput[:],
 	}
+	//log.Debugf("lengths: %d\n %d\n %d\n %d\n %d\n %d\n",
+	//	len(blockNumberBytes),
+	//	len(signingPrivateKey[32:]),
+	//	len(vrfPrivateKey[32:]),
+	//	len(block.Seed[:]),
+	//	len(vrfOutput),
+	//	len(signedVrfOutput[:]),
+	//)
+	//log.Debugf("values: %v\n %v\n %v\n %v\n %v\n %v\n",
+	//	blockNumberBytes,
+	//	signingPrivateKey[32:],
+	//	vrfPrivateKey[32:],
+	//	block.Seed[:],
+	//	vrfOutput,
+	//	signedVrfOutput[:],
+	//)
 
 	stxBytes, err := generateSignedAppCreate(
-		approvalBytes, clearBytes, globalStateSchema, localStateSchema, appCreatorPrivateKey, appArgs, suggestedParams, dummyAppID)
+		approvalBytes, clearBytes, globalStateSchema, localStateSchema, appCreatorPrivateKey, appArgs, suggestedParams, startingRound, dummyAppID)
 	txID, err := algodClient.SendRawTransaction(stxBytes).Do(context.Background())
 	if err != nil {
 		log.Debugf("stxbytes bas64: %v", base64.StdEncoding.EncodeToString(stxBytes))
@@ -644,9 +608,8 @@ func compileTeal(approvalProgramFilename, clearProgramFilename string, algodClie
 	return compiledApprovalBytes, compiledClearBytes, nil
 }
 
-func mainLoop(startingRound, appID, dummyAppID uint64, algodClient *algod.Client, indexerClient *indexer.Client,
-	signingPrivateKey, vrfPrivateKey ed25519.PrivateKey, serviceAccount crypto.Account,
-	appApprovalHashAddr types.Address) {
+func mainLoop(startingRound, appID, dummyAppID uint64, algodClient *algod.Client, signingPrivateKey,
+	vrfPrivateKey ed25519.PrivateKey, serviceAccount crypto.Account, appApprovalHashAddr types.Address) {
 	waitFactor := float64(1)
 	currentRound := startingRound
 	h := &tools.VrfRequestsHeap{}
@@ -662,9 +625,9 @@ func mainLoop(startingRound, appID, dummyAppID uint64, algodClient *algod.Client
 		requestsToHandle := getVrfRequestsToHandle(h, currentRound)
 		if len(requestsToHandle) != 0 {
 			log.Infof("getting block seed for %d", currentRound)
-			block, err := getBlock(indexerClient, currentRound)
+			block, err := getBlock(algodClient, currentRound)
 			if err != nil {
-				log.Errorf("error getting block seed of block %d from indexer", currentRound)
+				log.Errorf("error getting block seed of block %d from algod", currentRound)
 				return
 			}
 
@@ -675,7 +638,7 @@ func mainLoop(startingRound, appID, dummyAppID uint64, algodClient *algod.Client
 			}
 			handleRequestsForCurrentRound(
 				requestsToHandle,
-				block.Seed,
+				block.Seed[:],
 				signingPrivateKey,
 				vrfPrivateKey,
 				serviceAccount,
@@ -716,31 +679,23 @@ func GetFromState(key []byte, state []models.TealKeyValue) (models.TealValue, bo
 	return models.TealValue{}, false
 }
 
-func InitClients(algodAddress, algodToken, indexerAddress, indexerToken string) (*algod.Client, *indexer.Client, error){
+func InitClients(algodAddress, algodToken string) (*algod.Client, error) {
 	var failedClients []string
 	algodClient, err := algod.MakeClient(algodAddress, algodToken)
 	if err != nil {
 		failedClients = append(failedClients, "algod")
 		log.Error(err)
 	}
-	indexerClient, err := indexer.MakeClient(indexerAddress, indexerToken)
-	if err != nil {
-		failedClients = append(failedClients, "indexer")
-		log.Error(err)
-	}
 	if len(failedClients) > 0 {
 		err = fmt.Errorf("failed creating the following client(s): %s", strings.Join(failedClients, ","))
 	}
-	return algodClient, indexerClient, err
+	return algodClient, err
 }
 
 func TestEnvironmentVariables() error {
 	var missing []string
 	if AlgodAddress == "" {
 		missing = append(missing, "AF_ALGOD_ADDRESS")
-	}
-	if IndexerAddress == "" {
-		missing = append(missing, "AF_IDX_ADDRESS")
 	}
 	if len(missing) > 0 {
 		return fmt.Errorf("missing %s environment variable(s)", strings.Join(missing, ","))
@@ -757,7 +712,7 @@ var RunDaemonCmd = &cobra.Command{
 			log.Error(err)
 			return
 		}
-		algodClient, indexerClient, err := InitClients(AlgodAddress, AlgodToken, IndexerAddress, IndexerToken)
+		algodClient, err := InitClients(AlgodAddress, AlgodToken)
 		if err != nil {
 			log.Error(err)
 			return
@@ -767,7 +722,7 @@ var RunDaemonCmd = &cobra.Command{
 			log.Error(err)
 			return
 		}
-		startingRound = (startingRound/8)*8
+		startingRound = (startingRound / 8) * 8
 		signingPrivateKey, err := mnemonic.ToPrivateKey(signingMnemonicString)
 		if err != nil {
 			log.Errorf("invalid signing mnemonic: %v", err)
@@ -801,7 +756,7 @@ var RunDaemonCmd = &cobra.Command{
 		}
 
 		log.Info("creating app...")
-		dummyAppID, err := createDummyApp([]byte{0x05, 0x20, 0x01, 0x01, 0x22}, appCreatorPrivateKey, algodClient,
+		dummyAppID, err := createDummyApp([]byte{0x07, 0x20, 0x01, 0x01, 0x22}, appCreatorPrivateKey, algodClient,
 			suggestedParams)
 		if err != nil {
 			log.Error(err)
@@ -815,7 +770,7 @@ var RunDaemonCmd = &cobra.Command{
 		}
 		appApprovalHashAddress := crypto.AddressFromProgram(approvalBytes)
 		appID, err := createApp(
-			startingRound, dummyAppID, algodClient, indexerClient, appApprovalHashAddress, signingPrivateKey, vrfPrivateKey,
+			startingRound, dummyAppID, algodClient, appApprovalHashAddress, signingPrivateKey, vrfPrivateKey,
 			appCreatorPrivateKey, approvalBytes, clearBytes, suggestedParams)
 		if err != nil {
 			log.Error(err)
@@ -825,15 +780,18 @@ var RunDaemonCmd = &cobra.Command{
 
 		startingRound += 8
 
-
 		log.Info("running...")
+		// dirty workaround for weird issue where no blocks are added if no transactions
+		sendDummyTxn(algodClient, serviceAccount)
+		sendDummyTxn(algodClient, serviceAccount)
+		sendDummyTxn(algodClient, serviceAccount)
+		sendDummyTxn(algodClient, serviceAccount)
 
 		mainLoop(
 			startingRound,
 			appID,
 			dummyAppID,
 			algodClient,
-			indexerClient,
 			signingPrivateKey,
 			vrfPrivateKey,
 			serviceAccount,
