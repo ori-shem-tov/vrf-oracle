@@ -16,9 +16,7 @@ The smart-contract supports 4 commands:
 - **request** - Request for VRF value.
 - **respond** - Respond the VRF computation. Sent from an address used by the service, stored in global storage upon creation.
 
-`pyteal` code can be found in `pyteal/teal5.py`.
-
-Please note that since the smart contract is using the `vrf_verify` and `block` TEAL opcodes (that are not in production and not supported by `pyteal` at the time this was written) the `pyteal/teal5.py` and `pyteal/vrf_beacon_approval.teal` are not synced.
+`pyteal` code can be found in `pyteal/main.py`.
 
 ## Build
 
@@ -72,13 +70,13 @@ This code was tested with `Sandbox`'s [fork](https://github.com/ori-shem-tov/san
 ./sandbox version
 
 algod version
-12885379288
-3.5.149720.dev [avm-randomness] (commit #2d07bd0e)
+12885645221
+3.9.153509.dev [master] (commit #d7ed271c)
 go-algorand is licensed with AGPLv3.0
 source code available at https://github.com/algorand/go-algorand
 
 Indexer version
-2.12.1-dev.unknown compiled at 2022-06-29T17:41:41+0000 from git hash 03b140cfdc964bedfe59667eeda2f9f16ab3a8d1 (modified)
+2.13.0-dev.unknown compiled at 2022-08-07T09:39:45+0000 from git hash 6b61b08bcbaed5a994b9a68ac0bf40c1b902cca4 (modified)
 
 Postgres version
 postgres (PostgreSQL) 13.6
@@ -88,7 +86,7 @@ Use the following command to launch `Sandbox`:
 ```shell
 ./sandbox up source -v
 ```
-Make sure that `algod` image is built from `go-algorand`'s [fork](https://github.com/ori-shem-tov/go-algorand) on branch `avm-randomness`.
+Make sure that `algod` image is built from `go-algorand` commit [d7ed271c](https://github.com/algorand/go-algorand/tree/d7ed271c08b43708f07911589024a318deadca94) on branch `master`.
 
 Set environment variables:
 ```shell
@@ -109,6 +107,7 @@ go run ./cmd run-daemon \
 --vrf-mnemonic "boil frequent harvest donkey outside start thought road insane wine tooth fame assault any advice belt walk again proud debate culture omit diary able treat" \
 --service-mnemonic "chat glory west mobile desk coin hockey swallow tilt chunk task model hidden helmet toddler tortoise always afraid absorb valve bar distance history absorb exercise" \
 --app-creator-mnemonic "chat glory west mobile desk coin hockey swallow tilt chunk task model hidden helmet toddler tortoise always afraid absorb valve bar distance history absorb exercise" \
---approval-program pyteal/vrf_beacon_approval.teal \
---clear-program pyteal/vrf_beacon_clear.teal
+--approval-program pyteal/vrf_beacon_abi_approval.teal \
+--clear-program pyteal/vrf_beacon_abi_clear.teal \
+--round 8
 ```

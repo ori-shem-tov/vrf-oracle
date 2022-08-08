@@ -1,0 +1,75 @@
+{
+    "name": "Randomness beacon",
+    "methods": [
+        {
+            "name": "create_app",
+            "args": [
+                {
+                    "type": "uint64",
+                    "name": "round"
+                },
+                {
+                    "type": "string",
+                    "name": "vrf_proof"
+                },
+                {
+                    "type": "address",
+                    "name": "vrf_pk"
+                }
+            ],
+            "returns": {
+                "type": "void"
+            }
+        },
+        {
+            "name": "submit",
+            "args": [
+                {
+                    "type": "uint64",
+                    "name": "round"
+                },
+                {
+                    "type": "string",
+                    "name": "vrf_proof"
+                }
+            ],
+            "returns": {
+                "type": "void"
+            }
+        },
+        {
+            "name": "get",
+            "args": [
+                {
+                    "type": "uint64",
+                    "name": "round"
+                },
+                {
+                    "type": "string",
+                    "name": "user_data"
+                }
+            ],
+            "returns": {
+                "type": "string"
+            }
+        },
+        {
+            "name": "mustGet",
+            "args": [
+                {
+                    "type": "uint64",
+                    "name": "round"
+                },
+                {
+                    "type": "string",
+                    "name": "user_data"
+                }
+            ],
+            "returns": {
+                "type": "string"
+            }
+        }
+    ],
+    "desc": null,
+    "networks": {}
+}

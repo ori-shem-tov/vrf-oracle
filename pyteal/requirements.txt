@@ -1,3 +1,3 @@
-pyteal==0.7.0
+git+https://github.com/algorand/pyteal@master#egg=pyteal
 pycryptodomex==3.10.1
-py-algorand-sdk==1.6.0
+py-algorand-sdk==1.16.0

@@ -3,7 +3,7 @@ module github.com/ori-shem-tov/vrf-oracle
 go 1.14
 
 require (
-	github.com/algorand/go-algorand-sdk v1.11.0
+	github.com/algorand/go-algorand-sdk v1.18.0
 	github.com/algorandfoundation/go-aftools v0.0.0-00010101000000-000000000000
 	github.com/armon/consul-api v0.0.0-20180202201655-eb2c6b5be1b6 // indirect
 	github.com/coreos/bbolt v1.3.2 // indirect
