@@ -300,6 +300,11 @@ int 8
 int 0
 ==
 assert
+load 19
+len
+int 32
+==
+assert
 int 0
 int 63
 byte "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"

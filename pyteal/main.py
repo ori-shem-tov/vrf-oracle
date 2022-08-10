@@ -95,6 +95,14 @@ def init_global_state(start: Expr, length: Expr, value: Expr):
     )
 
 
+def get_last_stored_vrf_round():
+    return ExtractUint64(App.globalGet(Bytes('')), Int(0))
+
+
+def get_vrf_pk():
+    return Extract(App.globalGet(Bytes('')), Int(8), Int(32))
+
+
 def vrf_beacon_abi():
     router = Router(
         name='Randomness beacon',
@@ -135,8 +143,8 @@ def vrf_beacon_abi():
             Assert(
                 Or(
                     # Submitting proofs is allowed only for subsequent rounds or in case the smart contract is stalled
-                    ExtractUint64(App.globalGet(Bytes('')), Int(0)) + Int(8) == round.get(),
-                    round.get() - ExtractUint64(App.globalGet(Bytes('')), Int(0)) > Int(1000)
+                    get_last_stored_vrf_round() + Int(8) == round.get(),
+                    round.get() - get_last_stored_vrf_round() > Int(1000)
                 )
             ),
             # verify the vrf proof and store its output in the correct slot
@@ -145,7 +153,7 @@ def vrf_beacon_abi():
                 verify_vrf(
                     round.get(),
                     vrf_proof.encode(),
-                    Extract(App.globalGet(Bytes('')), Int(8), Int(32))
+                    get_vrf_pk()
                 )
             ),
             # update the last submitted round
@@ -158,8 +166,8 @@ def vrf_beacon_abi():
         return If(
                     Or(
                         # we check if the requested round is not in the valid window
-                        ExtractUint64(App.globalGet(Bytes('')), Int(0)) < round.get(),
-                        round.get() + Int(189) * Int(8) <= ExtractUint64(App.globalGet(Bytes('')), Int(0))
+                        get_last_stored_vrf_round() < round.get(),
+                        round.get() + Int(189) * Int(8) <= get_last_stored_vrf_round()
                     )
                 ).Then(
                     # according to arc-0021, if the requested value can't be found 'get' returns an empty string
@@ -188,8 +196,8 @@ def vrf_beacon_abi():
         # TODO should we enforce output to be of certain minimum length?
         return Seq([
             # according to arc-0021, if the requested value can't be found 'mustGet' panics
-            Assert(ExtractUint64(App.globalGet(Bytes('')), Int(0)) >= round.get()),
-            Assert(round.get() + Int(189) * Int(8) > ExtractUint64(App.globalGet(Bytes('')), Int(0))),
+            Assert(get_last_stored_vrf_round() >= round.get()),
+            Assert(round.get() + Int(189) * Int(8) > get_last_stored_vrf_round()),
             # if the requested round is in the valid window we return the hash of the concatenation of
             # the vrf output of the requested round with the user seed
             output.decode(
