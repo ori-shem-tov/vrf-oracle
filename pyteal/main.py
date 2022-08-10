@@ -82,7 +82,7 @@ def store_vrf(rnd: Expr, vrf_output: Expr):
 
 # init global state with a constant value
 @Subroutine(TealType.none)
-def init_global_state(start: Expr, length: Expr, value: Expr):
+def init_global_state(start: Expr, length: Expr):
     i = ScratchVar(TealType.uint64)
     init = i.store(start)
     cond = i.load() < length
@@ -90,7 +90,7 @@ def init_global_state(start: Expr, length: Expr, value: Expr):
     return For(init, cond, itr).Do(
         App.globalPut(
             Itob(i.load()),
-            value
+            Bytes(120*'a')  # we need an arbitrary value of length 120 to allow for 3 seeds per slot
         )
     )
 
@@ -123,7 +123,7 @@ def vrf_beacon_abi():
             Assert(round.get() % Int(8) == Int(0)),
             Assert(Len(vrf_pk.get()) == Int(32)),
             #  init global state to be bytes
-            init_global_state(Int(0), Int(63), Bytes(120*'a')),
+            init_global_state(Int(0), Int(63)),
             # verify the vrf proof and store its output in the correct slot
             store_vrf(
                 round.get(),
