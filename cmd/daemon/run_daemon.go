@@ -106,7 +106,7 @@ func computeWaitFactor(roundFromIndexer uint64, roundToFetch uint64) float64 {
 
 func addGetMethodCall(atc *future.AtomicTransactionComposer, round, appID uint64, serviceAccount crypto.Account, sp types.SuggestedParams) error {
 	signer := future.BasicAccountTransactionSigner{Account: serviceAccount}
-	methodSig := "get(uint64,string)string"
+	methodSig := "get(uint64,byte[])byte[32]"
 	method, err := abi.MethodFromSignature(methodSig)
 	if err != nil {
 		return fmt.Errorf("error abi.MethodFromSignature(methodSig) %v", err)
@@ -114,7 +114,7 @@ func addGetMethodCall(atc *future.AtomicTransactionComposer, round, appID uint64
 	methodCallParams := future.AddMethodCallParams{
 		AppID:           appID,
 		Method:          method,
-		MethodArgs:      []interface{}{round, ""},
+		MethodArgs:      []interface{}{round, []byte{}},
 		Sender:          serviceAccount.Address,
 		SuggestedParams: sp,
 		OnComplete:      0,
@@ -138,11 +138,11 @@ func addGetMethodCall(atc *future.AtomicTransactionComposer, round, appID uint64
 // the 1st App call is to the smart-contract to respond the VRF output, while the 2nd and 3rd are dummy app calls used
 // to increase the cost pool.
 func buildAnswerPhaseTransactionsGroupABI(appID, dummyAppID uint64, serviceAccount crypto.Account, vrfRequest models2.VrfRequest,
-	vrfOutput []byte, sp types.SuggestedParams) ([]byte, error) {
+	vrfProof []byte, sp types.SuggestedParams) ([]byte, error) {
 
 	var atc future.AtomicTransactionComposer
 	signer := future.BasicAccountTransactionSigner{Account: serviceAccount}
-	methodSig := "submit(uint64,string)void"
+	methodSig := "submit(uint64,byte[80])void"
 	method, err := abi.MethodFromSignature(methodSig)
 	if err != nil {
 		return nil, fmt.Errorf("error abi.MethodFromSignature(methodSig) %v", err)
@@ -150,10 +150,12 @@ func buildAnswerPhaseTransactionsGroupABI(appID, dummyAppID uint64, serviceAccou
 	sp.FirstRoundValid = types.Round(vrfRequest.BlockNumber + 1)
 	sp.LastRoundValid = sp.FirstRoundValid + 1000
 	log.Debugf("starting round %d", vrfRequest.BlockNumber)
+	var vrfProofArray [80]byte
+	copy(vrfProofArray[:], vrfProof)
 	methodCallParams := future.AddMethodCallParams{
 		AppID:           appID,
 		Method:          method,
-		MethodArgs:      []interface{}{vrfRequest.BlockNumber, string(vrfOutput)},
+		MethodArgs:      []interface{}{vrfRequest.BlockNumber, vrfProofArray},
 		Sender:          serviceAccount.Address,
 		SuggestedParams: sp,
 		OnComplete:      0,
@@ -495,17 +497,19 @@ func createABIApp(startingRound, dummyAppID uint64, algodClient *algod.Client, v
 		return 0, fmt.Errorf("error crypto.AccountFromPrivateKey(appCreatorPrivateKey) %v", err)
 	}
 	signer := future.BasicAccountTransactionSigner{Account: appCreatorAccount}
-	methodSig := "create_app(uint64,string,address)void"
+	methodSig := "create_app(uint64,byte[80],address)void"
 	method, err := abi.MethodFromSignature(methodSig)
 	if err != nil {
 		return 0, fmt.Errorf("error abi.MethodFromSignature(methodSig) %v", err)
 	}
 	suggestedParams.FirstRoundValid = types.Round(startingRound + 1)
 	suggestedParams.LastRoundValid = suggestedParams.FirstRoundValid + 1000
+	var vrfProofArray [80]byte
+	copy(vrfProofArray[:], vrfProof)
 	methodCallParams := future.AddMethodCallParams{
 		AppID:           0,
 		Method:          method,
-		MethodArgs:      []interface{}{startingRound, string(vrfProof), vrfPrivateKey[32:]},
+		MethodArgs:      []interface{}{startingRound, vrfProofArray, vrfPrivateKey[32:]},
 		Sender:          appCreatorAccount.Address,
 		SuggestedParams: suggestedParams,
 		OnComplete:      0,

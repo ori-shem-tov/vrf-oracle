@@ -4,19 +4,19 @@ int 0
 ==
 bnz main_l10
 txna ApplicationArgs 0
-method "create_app(uint64,byte[],address)void"
+method "create_app(uint64,byte[80],address)void"
 ==
 bnz main_l9
 txna ApplicationArgs 0
-method "submit(uint64,byte[])void"
+method "submit(uint64,byte[80])void"
 ==
 bnz main_l8
 txna ApplicationArgs 0
-method "get(uint64,byte[])byte[]"
+method "get(uint64,byte[])byte[32]"
 ==
 bnz main_l7
 txna ApplicationArgs 0
-method "mustGet(uint64,byte[])byte[]"
+method "mustGet(uint64,byte[])byte[32]"
 ==
 bnz main_l6
 err
@@ -214,9 +214,9 @@ retsub
 
 // update_last_round
 updatelastround_4:
-store 40
+store 39
 byte ""
-load 40
+load 39
 byte ""
 app_global_get
 extract 8 32
@@ -267,24 +267,23 @@ retsub
 
 // init_global_state
 initglobalstate_7:
-store 36
 store 35
 store 34
 load 34
-store 37
+store 36
 initglobalstate_7_l1:
-load 37
+load 36
 load 35
 <
 bz initglobalstate_7_l3
-load 37
-itob
 load 36
+itob
+byte "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 app_global_put
-load 37
+load 36
 int 1
 +
-store 37
+store 36
 b initglobalstate_7_l1
 initglobalstate_7_l3:
 retsub
@@ -307,7 +306,6 @@ int 32
 assert
 int 0
 int 63
-byte "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 callsub initglobalstate_7
 load 17
 load 17
@@ -325,17 +323,17 @@ retsub
 
 // submit
 submit_9:
-store 39
 store 38
+store 37
 byte ""
 app_global_get
 int 0
 extract_uint64
 int 8
 +
-load 38
+load 37
 ==
-load 38
+load 37
 byte ""
 app_global_get
 int 0
@@ -345,15 +343,15 @@ int 1000
 >
 ||
 assert
+load 37
+load 37
 load 38
-load 38
-load 39
 byte ""
 app_global_get
 extract 8 32
 callsub verifyvrf_5
 callsub storevrf_6
-load 38
+load 37
 itob
 callsub updatelastround_4
 retsub

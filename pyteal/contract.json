@@ -9,7 +9,7 @@
                     "name": "round"
                 },
                 {
-                    "type": "byte[]",
+                    "type": "byte[80]",
                     "name": "vrf_proof"
                 },
                 {
@@ -29,7 +29,7 @@
                     "name": "round"
                 },
                 {
-                    "type": "byte[]",
+                    "type": "byte[80]",
                     "name": "vrf_proof"
                 }
             ],
@@ -50,7 +50,7 @@
                 }
             ],
             "returns": {
-                "type": "byte[]"
+                "type": "byte[32]"
             }
         },
         {
@@ -66,7 +66,7 @@
                 }
             ],
             "returns": {
-                "type": "byte[]"
+                "type": "byte[32]"
             }
         }
     ],

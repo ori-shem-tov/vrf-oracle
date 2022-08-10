@@ -1,4 +1,5 @@
 import json
+from typing import Literal
 
 from pyteal import *
 
@@ -118,7 +119,7 @@ def vrf_beacon_abi():
     )
 
     @router.method(no_op=CallConfig.CREATE)
-    def create_app(round: abi.Uint64, vrf_proof: abi.DynamicArray[abi.Byte], vrf_pk: abi.Address):
+    def create_app(round: abi.Uint64, vrf_proof: abi.StaticArray[abi.Byte, Literal[80]], vrf_pk: abi.Address):
         return Seq([
             Assert(round.get() % Int(8) == Int(0)),
             Assert(Len(vrf_pk.get()) == Int(32)),
@@ -138,7 +139,7 @@ def vrf_beacon_abi():
         ])
 
     @router.method(no_op=CallConfig.CALL)
-    def submit(round: abi.Uint64, vrf_proof: abi.DynamicArray[abi.Byte]):
+    def submit(round: abi.Uint64, vrf_proof: abi.StaticArray[abi.Byte, Literal[80]]):
         return Seq([
             Assert(
                 Or(
@@ -161,7 +162,7 @@ def vrf_beacon_abi():
         ])
 
     @router.method(no_op=CallConfig.CALL)
-    def get(round: abi.Uint64, user_data: abi.DynamicArray[abi.Byte], *, output: abi.DynamicArray[abi.Byte]):
+    def get(round: abi.Uint64, user_data: abi.DynamicArray[abi.Byte], *, output: abi.StaticArray[abi.Byte, Literal[32]]):
         # TODO should we enforce output to be of certain minimum length?
         return If(
                     Or(
@@ -192,7 +193,7 @@ def vrf_beacon_abi():
                 )
 
     @router.method(no_op=CallConfig.CALL)
-    def mustGet(round: abi.Uint64, user_data: abi.DynamicArray[abi.Byte], *, output: abi.DynamicArray[abi.Byte]):
+    def mustGet(round: abi.Uint64, user_data: abi.DynamicArray[abi.Byte], *, output: abi.StaticArray[abi.Byte, Literal[32]]):
         # TODO should we enforce output to be of certain minimum length?
         return Seq([
             # according to arc-0021, if the requested value can't be found 'mustGet' panics
