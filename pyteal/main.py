@@ -108,13 +108,7 @@ def vrf_beacon_abi():
     router = Router(
         name='Randomness beacon',
         bare_calls=BareCallActions(
-            # Blocked opt_in and close_out for now as we don't use any local state (default is CallConfig.NEVER)
-            # opt_in=OnCompleteAction(action=Approve(), call_config=CallConfig.CALL),
-            # close_out=OnCompleteAction(action=Approve(), call_config=CallConfig.CALL),
             clear_state=OnCompleteAction(action=Approve(), call_config=CallConfig.CALL),
-            # Only allow the app creator to delete and update
-            delete_application=OnCompleteAction(action=Return(Txn.sender() == Global.creator_address()), call_config=CallConfig.CALL),
-            update_application=OnCompleteAction(action=Return(Txn.sender() == Global.creator_address()), call_config=CallConfig.CALL),
         )
     )
 
