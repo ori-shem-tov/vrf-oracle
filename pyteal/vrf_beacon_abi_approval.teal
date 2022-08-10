@@ -4,19 +4,19 @@ int 0
 ==
 bnz main_l10
 txna ApplicationArgs 0
-method "create_app(uint64,string,address)void"
+method "create_app(uint64,byte[],address)void"
 ==
 bnz main_l9
 txna ApplicationArgs 0
-method "submit(uint64,string)void"
+method "submit(uint64,byte[])void"
 ==
 bnz main_l8
 txna ApplicationArgs 0
-method "get(uint64,string)string"
+method "get(uint64,byte[])byte[]"
 ==
 bnz main_l7
 txna ApplicationArgs 0
-method "mustGet(uint64,string)string"
+method "mustGet(uint64,byte[])byte[]"
 ==
 bnz main_l6
 err
@@ -307,7 +307,6 @@ callsub initglobalstate_7
 load 17
 load 17
 load 18
-extract 2 0
 load 19
 callsub verifyvrf_5
 callsub storevrf_6
@@ -344,7 +343,6 @@ assert
 load 38
 load 38
 load 39
-extract 2 0
 byte ""
 app_global_get
 extract 8 32
@@ -387,35 +385,12 @@ callsub getseedcellfromround_2
 int 32
 extract3
 load 9
-extract 2 0
 concat
 sha512_256
-len
-itob
-extract 6 0
-load 8
-callsub getslotfromround_1
-app_global_get
-int 32
-load 8
-callsub getseedcellfromround_2
-*
-int 32
-extract3
-load 9
-extract 2 0
-concat
-sha512_256
-concat
 store 10
 b get_10_l3
 get_10_l2:
 byte ""
-len
-itob
-extract 6 0
-byte ""
-concat
 store 10
 get_10_l3:
 load 10
@@ -453,26 +428,8 @@ callsub getseedcellfromround_2
 int 32
 extract3
 load 15
-extract 2 0
 concat
 sha512_256
-len
-itob
-extract 6 0
-load 14
-callsub getslotfromround_1
-app_global_get
-int 32
-load 14
-callsub getseedcellfromround_2
-*
-int 32
-extract3
-load 15
-extract 2 0
-concat
-sha512_256
-concat
 store 16
 load 16
 retsub

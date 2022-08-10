@@ -110,11 +110,10 @@ def vrf_beacon_abi():
     )
 
     @router.method(no_op=CallConfig.CREATE)
-    def create_app(round: abi.Uint64, vrf_proof: abi.String, vrf_pk: abi.Address):
+    def create_app(round: abi.Uint64, vrf_proof: abi.DynamicArray[abi.Byte], vrf_pk: abi.Address):
         return Seq([
-            # Assert(Len(round.get()) == Int(8)),  # TODO: see if necessary
             Assert(round.get() % Int(8) == Int(0)),
-            # Assert(Len(vrf_pk.get()) == Int(32)),  # TODO: see if necessary
+            Assert(Len(vrf_pk.get()) == Int(32)),
             #  init global state to be bytes
             init_global_state(Int(0), Int(63), Bytes(120*'a')),
             # verify the vrf proof and store its output in the correct slot
@@ -122,7 +121,7 @@ def vrf_beacon_abi():
                 round.get(),
                 verify_vrf(
                     round.get(),
-                    vrf_proof.get(),
+                    vrf_proof.encode(),
                     vrf_pk.get()
                 )
             ),
@@ -131,7 +130,7 @@ def vrf_beacon_abi():
         ])
 
     @router.method(no_op=CallConfig.CALL)
-    def submit(round: abi.Uint64, vrf_proof: abi.String):
+    def submit(round: abi.Uint64, vrf_proof: abi.DynamicArray[abi.Byte]):
         return Seq([
             Assert(
                 Or(
@@ -145,7 +144,7 @@ def vrf_beacon_abi():
                 round.get(),
                 verify_vrf(
                     round.get(),
-                    vrf_proof.get(),
+                    vrf_proof.encode(),
                     Extract(App.globalGet(Bytes('')), Int(8), Int(32))
                 )
             ),
@@ -154,7 +153,7 @@ def vrf_beacon_abi():
         ])
 
     @router.method(no_op=CallConfig.CALL)
-    def get(round: abi.Uint64, user_data: abi.String, *, output: abi.String):
+    def get(round: abi.Uint64, user_data: abi.DynamicArray[abi.Byte], *, output: abi.DynamicArray[abi.Byte]):
         # TODO should we enforce output to be of certain minimum length?
         return If(
                     Or(
@@ -164,13 +163,13 @@ def vrf_beacon_abi():
                     )
                 ).Then(
                     # according to arc-0021, if the requested value can't be found 'get' returns an empty string
-                    output.set(
+                    output.decode(
                         Bytes('')
                     )
                 ).Else(
                     # if the requested round is in the valid window we return the hash of the concatenation of
                     # the vrf output of the requested round with the user seed
-                    output.set(
+                    output.decode(
                         Sha512_256(
                             Concat(
                                 Extract(
@@ -178,14 +177,14 @@ def vrf_beacon_abi():
                                     Int(32) * get_seed_cell_from_round(round.get()),
                                     Int(32)
                                 ),
-                                user_data.get()
+                                user_data.encode()
                             )
                         )
                     )
                 )
 
     @router.method(no_op=CallConfig.CALL)
-    def mustGet(round: abi.Uint64, user_data: abi.String, *, output: abi.String):
+    def mustGet(round: abi.Uint64, user_data: abi.DynamicArray[abi.Byte], *, output: abi.DynamicArray[abi.Byte]):
         # TODO should we enforce output to be of certain minimum length?
         return Seq([
             # according to arc-0021, if the requested value can't be found 'mustGet' panics
@@ -193,7 +192,7 @@ def vrf_beacon_abi():
             Assert(round.get() + Int(189) * Int(8) > ExtractUint64(App.globalGet(Bytes('')), Int(0))),
             # if the requested round is in the valid window we return the hash of the concatenation of
             # the vrf output of the requested round with the user seed
-            output.set(
+            output.decode(
                 Sha512_256(
                     Concat(
                         Extract(
@@ -201,7 +200,7 @@ def vrf_beacon_abi():
                             Int(32) * get_seed_cell_from_round(round.get()),
                             Int(32)
                         ),
-                        user_data.get()
+                        user_data.encode()
                     )
                 )
             )

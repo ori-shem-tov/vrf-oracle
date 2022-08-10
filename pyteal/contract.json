@@ -9,7 +9,7 @@
                     "name": "round"
                 },
                 {
-                    "type": "string",
+                    "type": "byte[]",
                     "name": "vrf_proof"
                 },
                 {
@@ -29,7 +29,7 @@
                     "name": "round"
                 },
                 {
-                    "type": "string",
+                    "type": "byte[]",
                     "name": "vrf_proof"
                 }
             ],
@@ -45,12 +45,12 @@
                     "name": "round"
                 },
                 {
-                    "type": "string",
+                    "type": "byte[]",
                     "name": "user_data"
                 }
             ],
             "returns": {
-                "type": "string"
+                "type": "byte[]"
             }
         },
         {
@@ -61,12 +61,12 @@
                     "name": "round"
                 },
                 {
-                    "type": "string",
+                    "type": "byte[]",
                     "name": "user_data"
                 }
             ],
             "returns": {
-                "type": "string"
+                "type": "byte[]"
             }
         }
     ],
