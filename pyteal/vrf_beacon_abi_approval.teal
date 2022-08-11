@@ -1,26 +1,22 @@
 #pragma version 7
-txn NumAppArgs
-int 0
-==
-bnz main_l10
 txna ApplicationArgs 0
 method "create_app(uint64,byte[80],address)void"
 ==
-bnz main_l9
+bnz main_l8
 txna ApplicationArgs 0
 method "submit(uint64,byte[80])void"
 ==
-bnz main_l8
+bnz main_l7
 txna ApplicationArgs 0
 method "get(uint64,byte[])byte[32]"
 ==
-bnz main_l7
+bnz main_l6
 txna ApplicationArgs 0
 method "mustGet(uint64,byte[])byte[32]"
 ==
-bnz main_l6
+bnz main_l5
 err
-main_l6:
+main_l5:
 txn OnCompletion
 int NoOp
 ==
@@ -44,7 +40,7 @@ concat
 log
 int 1
 return
-main_l7:
+main_l6:
 txn OnCompletion
 int NoOp
 ==
@@ -68,7 +64,7 @@ concat
 log
 int 1
 return
-main_l8:
+main_l7:
 txn OnCompletion
 int NoOp
 ==
@@ -87,7 +83,7 @@ load 4
 callsub submit_9
 int 1
 return
-main_l9:
+main_l8:
 txn OnCompletion
 int NoOp
 ==
@@ -109,34 +105,6 @@ load 2
 callsub createapp_8
 int 1
 return
-main_l10:
-txn OnCompletion
-int UpdateApplication
-==
-bnz main_l14
-txn OnCompletion
-int DeleteApplication
-==
-bnz main_l13
-err
-main_l13:
-txn ApplicationID
-int 0
-!=
-assert
-txn Sender
-global CreatorAddress
-==
-return
-main_l14:
-txn ApplicationID
-int 0
-!=
-assert
-txn Sender
-global CreatorAddress
-==
-return
 
 // ceiling8
 ceiling8_0:
@@ -146,6 +114,8 @@ int 7
 +
 int 8
 /
+int 8
+*
 retsub
 
 // get_slot_from_round
@@ -153,6 +123,8 @@ getslotfromround_1:
 store 28
 load 28
 callsub ceiling8_0
+int 8
+/
 int 189
 %
 int 3
@@ -165,6 +137,8 @@ getseedcellfromround_2:
 store 30
 load 30
 callsub ceiling8_0
+int 8
+/
 int 189
 %
 int 3

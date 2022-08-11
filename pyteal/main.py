@@ -6,19 +6,19 @@ from pyteal import *
 
 @Subroutine(TealType.uint64)
 def ceiling8(num: Expr):
-    return (num + Int(7)) / Int(8)
+    return ((num + Int(7)) / Int(8)) * Int(8)
 
 
 # return the slot number for the given round
 @Subroutine(TealType.bytes)
 def get_slot_from_round(rnd: Expr):
-    return Itob((ceiling8(rnd) % Int(189)) / Int(3))
+    return Itob(((ceiling8(rnd) / Int(8)) % Int(189)) / Int(3))
 
 
 # return the inner cell for the given round
 @Subroutine(TealType.uint64)
 def get_seed_cell_from_round(rnd: Expr):
-    return (ceiling8(rnd) % Int(189)) % Int(3)
+    return ((ceiling8(rnd) / Int(8)) % Int(189)) % Int(3)
 
 
 # a seed can be located in one of 189 cells (63 slots with 3 cells each)
