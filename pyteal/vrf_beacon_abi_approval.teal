@@ -32,7 +32,7 @@ txna ApplicationArgs 2
 store 12
 load 11
 load 12
-callsub mustGet_11
+callsub mustGet_14
 store 13
 byte 0x151f7c75
 load 13
@@ -56,7 +56,7 @@ txna ApplicationArgs 2
 store 6
 load 5
 load 6
-callsub get_10
+callsub get_13
 store 7
 byte 0x151f7c75
 load 7
@@ -80,7 +80,7 @@ txna ApplicationArgs 2
 store 4
 load 3
 load 4
-callsub submit_9
+callsub submit_12
 int 1
 return
 main_l8:
@@ -102,14 +102,14 @@ store 2
 load 0
 load 1
 load 2
-callsub createapp_8
+callsub createapp_11
 int 1
 return
 
 // ceiling8
 ceiling8_0:
-store 29
-load 29
+store 32
+load 32
 int 7
 +
 int 8
@@ -120,8 +120,8 @@ retsub
 
 // get_slot_from_round
 getslotfromround_1:
-store 28
-load 28
+store 31
+load 31
 callsub ceiling8_0
 int 8
 /
@@ -134,8 +134,8 @@ retsub
 
 // get_seed_cell_from_round
 getseedcellfromround_2:
-store 30
-load 30
+store 33
+load 33
 callsub ceiling8_0
 int 8
 /
@@ -147,123 +147,223 @@ retsub
 
 // update_slot_with_new_seed
 updateslotwithnewseed_3:
-store 33
-store 32
-store 31
-load 33
+store 36
+store 35
+store 34
+load 36
 int 0
 ==
 bnz updateslotwithnewseed_3_l6
-load 33
+load 36
 int 1
 ==
 bnz updateslotwithnewseed_3_l5
-load 33
+load 36
 int 2
 ==
 bnz updateslotwithnewseed_3_l4
 err
 updateslotwithnewseed_3_l4:
-load 31
+load 34
 extract 0 64
-load 32
+load 35
 concat
 b updateslotwithnewseed_3_l7
 updateslotwithnewseed_3_l5:
-load 31
+load 34
 extract 0 32
-load 32
+load 35
 concat
-load 31
+load 34
 extract 64 32
 concat
 b updateslotwithnewseed_3_l7
 updateslotwithnewseed_3_l6:
-load 32
-load 31
+load 35
+load 34
 extract 32 64
 concat
 updateslotwithnewseed_3_l7:
 retsub
 
-// update_last_round
-updatelastround_4:
-store 39
-byte ""
-load 39
-byte ""
-app_global_get
-extract 8 32
-concat
-app_global_put
-retsub
-
 // verify_vrf
-verifyvrf_5:
-store 22
-store 21
-store 20
-load 20
+verifyvrf_4:
+store 25
+store 24
+store 23
+load 23
 itob
-load 20
+load 23
 block BlkSeed
 concat
 sha512_256
-load 21
-load 22
-vrf_verify VrfAlgorand
-store 24
-store 23
 load 24
+load 25
+vrf_verify VrfAlgorand
+store 27
+store 26
+load 27
 int 1
 ==
 assert
-load 23
+load 26
 retsub
 
 // store_vrf
-storevrf_6:
-store 26
-store 25
-load 25
+storevrf_5:
+store 29
+store 28
+load 28
 callsub getslotfromround_1
-store 27
-load 27
-load 27
+store 30
+load 30
+load 30
 app_global_get
-load 26
+load 29
 sha512_256
-load 25
+load 28
 callsub getseedcellfromround_2
 callsub updateslotwithnewseed_3
 app_global_put
 retsub
 
+// verify_and_store_vrf
+verifyandstorevrf_6:
+store 22
+store 21
+store 20
+load 20
+load 20
+load 21
+load 22
+callsub verifyvrf_4
+callsub storevrf_5
+retsub
+
 // init_global_state
 initglobalstate_7:
-store 35
-store 34
-load 34
-store 36
+store 40
+store 39
+store 38
+store 37
+load 37
+store 41
 initglobalstate_7_l1:
-load 36
-load 35
+load 41
+load 38
 <
 bz initglobalstate_7_l3
-load 36
+load 41
 itob
 byte "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 app_global_put
-load 36
+load 41
 int 1
 +
-store 36
+store 41
 b initglobalstate_7_l1
 initglobalstate_7_l3:
+byte ""
+load 39
+itob
+load 39
+itob
+concat
+load 40
+concat
+app_global_put
+retsub
+
+// is_round_in_valid_range
+isroundinvalidrange_8:
+store 45
+byte ""
+app_global_get
+int 0
+extract_uint64
+load 45
+>=
+load 45
+int 189
+int 8
+*
++
+byte ""
+app_global_get
+int 0
+extract_uint64
+>
+&&
+load 45
+byte ""
+app_global_get
+int 8
+extract_uint64
+>=
+&&
+retsub
+
+// get_randomness
+getrandomness_9:
+store 47
+store 46
+load 46
+callsub getslotfromround_1
+app_global_get
+int 32
+load 46
+callsub getseedcellfromround_2
+*
+int 32
+extract3
+load 46
+itob
+concat
+load 47
+concat
+sha512_256
+retsub
+
+// is_recovering
+isrecovering_10:
+store 44
+global Round
+int 16
++
+int 1000
+>=
+bnz isrecovering_10_l2
+int 0
+b isrecovering_10_l3
+isrecovering_10_l2:
+global Round
+byte ""
+app_global_get
+int 0
+extract_uint64
+-
+int 1008
+>
+load 44
+int 8
+%
+int 0
+==
+&&
+load 44
+global Round
+int 16
++
+int 1000
+-
+callsub ceiling8_0
+<=
+&&
+isrecovering_10_l3:
 retsub
 
 // create_app
-createapp_8:
+createapp_11:
 store 19
 store 18
 store 17
@@ -280,133 +380,101 @@ int 32
 assert
 int 0
 int 63
-callsub initglobalstate_7
 load 17
+load 19
+callsub initglobalstate_7
 load 17
 load 18
 load 19
-callsub verifyvrf_5
-callsub storevrf_6
-byte ""
-load 17
-itob
-load 19
-concat
-app_global_put
+callsub verifyandstorevrf_6
 retsub
 
 // submit
-submit_9:
-store 38
-store 37
+submit_12:
+store 43
+store 42
 byte ""
 app_global_get
 int 0
 extract_uint64
 int 8
 +
-load 37
+load 42
 ==
-load 37
+load 42
+callsub isrecovering_10
+||
+assert
+load 42
+load 43
+byte ""
+app_global_get
+extract 16 32
+callsub verifyandstorevrf_6
+byte ""
+load 42
+itob
+byte ""
+app_global_get
+int 8
+extract_uint64
+itob
+concat
+byte ""
+app_global_get
+extract 16 32
+concat
+app_global_put
+load 42
+callsub isrecovering_10
+bz submit_12_l2
+byte ""
 byte ""
 app_global_get
 int 0
 extract_uint64
--
-int 1000
->
-||
-assert
-load 37
-load 37
-load 38
+itob
+load 42
+itob
+concat
 byte ""
 app_global_get
-extract 8 32
-callsub verifyvrf_5
-callsub storevrf_6
-load 37
-itob
-callsub updatelastround_4
+extract 16 32
+concat
+app_global_put
+submit_12_l2:
 retsub
 
 // get
-get_10:
+get_13:
 store 9
 store 8
-byte ""
-app_global_get
-int 0
-extract_uint64
 load 8
-<
+callsub isroundinvalidrange_8
+!
+bnz get_13_l2
 load 8
-int 189
-int 8
-*
-+
-byte ""
-app_global_get
-int 0
-extract_uint64
-<=
-||
-bnz get_10_l2
-load 8
-callsub getslotfromround_1
-app_global_get
-int 32
-load 8
-callsub getseedcellfromround_2
-*
-int 32
-extract3
 load 9
-concat
-sha512_256
+callsub getrandomness_9
 store 10
-b get_10_l3
-get_10_l2:
+b get_13_l3
+get_13_l2:
 byte ""
 store 10
-get_10_l3:
+get_13_l3:
 load 10
 retsub
 
 // mustGet
-mustGet_11:
+mustGet_14:
 store 15
 store 14
-byte ""
-app_global_get
-int 0
-extract_uint64
 load 14
->=
+callsub isroundinvalidrange_8
 assert
 load 14
-int 189
-int 8
-*
-+
-byte ""
-app_global_get
-int 0
-extract_uint64
->
-assert
-load 14
-callsub getslotfromround_1
-app_global_get
-int 32
-load 14
-callsub getseedcellfromround_2
-*
-int 32
-extract3
 load 15
-concat
-sha512_256
+callsub getrandomness_9
 store 16
 load 16
 retsub

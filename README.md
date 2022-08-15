@@ -42,15 +42,12 @@ This service can take the following arguments:
       --app-creator-mnemonic string   25-word mnemonic of the app creator (required)
       --approval-program string       TEAL script of the approval program (required)
       --clear-program string          TEAL script of the clear program (required)
-      --round uint                    the round to start scanning from (optional. default: current round)
+      --starting-round uint           the round to start scanning from (optional. default: current round)
       --service-mnemonic string       25-word mnemonic of the service for writing the response (required)
-      --signing-mnemonic string       25-word mnemonic of the oracle for signing (required)
       --vrf-mnemonic string           25-word mnemonic of the oracle for computing vrf (required)
 ```
 
 `service-mnemonic` account should be funded to cover transaction fees.
-
-Please note that `signing-mnemonic` account is used to sign the VRF proof and that the signature is passed to the smart contract **but the smart contract is not validating it**. Therefore, the `signing-mnemonic` arg should be **REMOVED** in the final implementation.
 
 ### Execute
 
@@ -103,11 +100,10 @@ Using `./sandbox goal clerk send` command, fund the service account `LWOXAHEF32I
 ```shell
 export VRF_LOG_LEVEL=debug  # optional but recommended
 go run ./cmd run-daemon \
---signing-mnemonic "tobacco bottom online arch street good gain sting wrap power scissors unique common shoe sunny unaware bind jewel stock polar radio world liberty about village" \
 --vrf-mnemonic "boil frequent harvest donkey outside start thought road insane wine tooth fame assault any advice belt walk again proud debate culture omit diary able treat" \
 --service-mnemonic "chat glory west mobile desk coin hockey swallow tilt chunk task model hidden helmet toddler tortoise always afraid absorb valve bar distance history absorb exercise" \
 --app-creator-mnemonic "chat glory west mobile desk coin hockey swallow tilt chunk task model hidden helmet toddler tortoise always afraid absorb valve bar distance history absorb exercise" \
 --approval-program pyteal/vrf_beacon_abi_approval.teal \
 --clear-program pyteal/vrf_beacon_abi_clear.teal \
---round 8
+--starting-round 8
 ```

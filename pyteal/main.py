@@ -11,14 +11,14 @@ def ceiling8(num: Expr):
 
 # return the slot number for the given round
 @Subroutine(TealType.bytes)
-def get_slot_from_round(rnd: Expr):
-    return Itob(((ceiling8(rnd) / Int(8)) % Int(189)) / Int(3))
+def get_slot_from_round(round: Expr):
+    return Itob(((ceiling8(round) / Int(8)) % Int(189)) / Int(3))
 
 
 # return the inner cell for the given round
 @Subroutine(TealType.uint64)
-def get_seed_cell_from_round(rnd: Expr):
-    return ((ceiling8(rnd) / Int(8)) % Int(189)) % Int(3)
+def get_seed_cell_from_round(round: Expr):
+    return ((ceiling8(round) / Int(8)) % Int(189)) % Int(3)
 
 
 # a seed can be located in one of 189 cells (63 slots with 3 cells each)
@@ -37,17 +37,25 @@ def update_slot_with_new_seed(slot: Expr, seed: Expr, seed_cell_idx: Expr):
 
 
 # update the last updated round
-@Subroutine(TealType.none)
-def update_last_round(rnd_bytes: Expr):
+def update_last_round(last_round: Expr):
     return App.globalPut(
         Bytes(''),
         Concat(
-            rnd_bytes,
-            Extract(
-                App.globalGet(Bytes('')),
-                Int(8),
-                Int(32)
-            )
+            Itob(last_round),
+            Itob(get_first_stored_vrf_round()),
+            get_vrf_pk()
+        )
+    )
+
+
+# update the first updated round
+def update_first_round(first_round: Expr):
+    return App.globalPut(
+        Bytes(''),
+        Concat(
+            Itob(get_last_stored_vrf_round()),
+            Itob(first_round),
+            get_vrf_pk()
         )
     )
 
@@ -55,7 +63,7 @@ def update_last_round(rnd_bytes: Expr):
 # verify the vrf proof and return the vrf output (the seed)
 @Subroutine(TealType.bytes)
 def verify_vrf(round: Expr, vrf_proof: Expr, vrf_pk: Expr):
-    block_seed = Block.seed(round)
+    block_seed = Block.seed(round)  # as a security measure, this will fail if seed is unavailable
     vrf_verify = VrfVerify.algorand(Sha512_256(Concat(Itob(round), block_seed)), vrf_proof, vrf_pk)
     return Seq([
         vrf_verify,
@@ -66,42 +74,111 @@ def verify_vrf(round: Expr, vrf_proof: Expr, vrf_pk: Expr):
 
 # store the vrf output (the seed) in its designated cell
 @Subroutine(TealType.none)
-def store_vrf(rnd: Expr, vrf_output: Expr):
+def store_vrf(round: Expr, vrf_output: Expr):
     slot = ScratchVar(TealType.bytes)
     return Seq([
-        slot.store(get_slot_from_round(rnd)),
+        slot.store(get_slot_from_round(round)),
         App.globalPut(
             slot.load(),
             update_slot_with_new_seed(
                 App.globalGet(slot.load()),
                 Sha512_256(vrf_output),
-                get_seed_cell_from_round(rnd)
+                get_seed_cell_from_round(round)
             )
         )
     ])
 
 
+@Subroutine(TealType.none)
+def verify_and_store_vrf(round: Expr, vrf_proof: Expr, vrf_pk: Expr):
+    return store_vrf(
+        round,
+        verify_vrf(
+            round,
+            vrf_proof,
+            vrf_pk
+        )
+    )
+
+
 # init global state with a constant value
 @Subroutine(TealType.none)
-def init_global_state(start: Expr, length: Expr):
+def init_global_state(start: Expr, length: Expr, round: Expr, vrf_pk: Expr):
     i = ScratchVar(TealType.uint64)
     init = i.store(start)
     cond = i.load() < length
     itr = i.store(i.load() + Int(1))
-    return For(init, cond, itr).Do(
-        App.globalPut(
-            Itob(i.load()),
-            Bytes(120*'a')  # we need an arbitrary value of length 120 to allow for 3 seeds per slot
-        )
-    )
+    return Seq([
+        For(init, cond, itr).Do(
+            App.globalPut(
+                Itob(i.load()),
+                Bytes(120 * 'a')  # we need an arbitrary value of length 120 to allow for 3 seeds per slot
+            )
+        ),
+        # store the initial round and the VRF public key in their own slot (metadata slot)
+        App.globalPut(Bytes(''), Concat(Itob(round), Itob(round), vrf_pk))
+    ])
 
 
 def get_last_stored_vrf_round():
     return ExtractUint64(App.globalGet(Bytes('')), Int(0))
 
 
+def get_first_stored_vrf_round():
+    return ExtractUint64(App.globalGet(Bytes('')), Int(8))
+
+
 def get_vrf_pk():
-    return Extract(App.globalGet(Bytes('')), Int(8), Int(32))
+    return Extract(App.globalGet(Bytes('')), Int(16), Int(32))
+
+
+@Subroutine(TealType.uint64)
+def is_round_in_valid_range(round: Expr):
+    return And(
+        get_last_stored_vrf_round() >= round,
+        round + Int(189) * Int(8) > get_last_stored_vrf_round(),
+        round >= get_first_stored_vrf_round()
+    )
+
+
+@Subroutine(TealType.bytes)
+def get_randomness(round: Expr, user_data: Expr):
+    return Sha512_256(
+        Concat(
+            Extract(
+                App.globalGet(get_slot_from_round(round)),
+                Int(32) * get_seed_cell_from_round(round),
+                Int(32)
+            ),
+            Itob(round),
+            user_data
+        )
+    )
+
+
+@Subroutine(TealType.uint64)
+def is_recovering(round: Expr):
+    num_of_retained_blocks = Int(1000)
+    grace_blocks = Int(16)
+    return If(
+        Global.round() + grace_blocks >= num_of_retained_blocks
+    ).Then(
+        And(
+            Global.round() - get_last_stored_vrf_round() > Int(1008),
+            round % Int(8) == Int(0),
+            round <= ceiling8(Global.round() + grace_blocks - num_of_retained_blocks)
+        )
+    ).Else(
+        Int(0)
+    )
+
+
+def can_submit(round: abi.Uint64):
+    return Or(
+        # Submitting proofs is allowed only for subsequent rounds or in case the smart contract is stalled
+        get_last_stored_vrf_round() + Int(8) == round.get(),
+        is_recovering(round.get())
+    )
 
 
 def vrf_beacon_abi():
@@ -118,94 +195,52 @@ def vrf_beacon_abi():
             Assert(round.get() % Int(8) == Int(0)),
             Assert(Len(vrf_pk.get()) == Int(32)),
             #  init global state to be bytes
-            init_global_state(Int(0), Int(63)),
+            init_global_state(Int(0), Int(63), round.get(), vrf_pk.get()),
             # verify the vrf proof and store its output in the correct slot
-            store_vrf(
-                round.get(),
-                verify_vrf(
-                    round.get(),
-                    vrf_proof.encode(),
-                    vrf_pk.get()
-                )
-            ),
-            # store the initial round and the VRF public key in their own slot (metadata slot)
-            App.globalPut(Bytes(''), Concat(Itob(round.get()), vrf_pk.get()))
+            verify_and_store_vrf(round.get(), vrf_proof.encode(), vrf_pk.get()),
         ])
 
     @router.method(no_op=CallConfig.CALL)
     def submit(round: abi.Uint64, vrf_proof: abi.StaticArray[abi.Byte, Literal[80]]):
         return Seq([
-            Assert(
-                Or(
-                    # Submitting proofs is allowed only for subsequent rounds or in case the smart contract is stalled
-                    get_last_stored_vrf_round() + Int(8) == round.get(),
-                    round.get() - get_last_stored_vrf_round() > Int(1000)
-                )
-            ),
+            Assert(can_submit(round)),
             # verify the vrf proof and store its output in the correct slot
-            store_vrf(
-                round.get(),
-                verify_vrf(
-                    round.get(),
-                    vrf_proof.encode(),
-                    get_vrf_pk()
-                )
-            ),
+            verify_and_store_vrf(round.get(), vrf_proof.encode(), get_vrf_pk()),
             # update the last submitted round
-            update_last_round(Itob(round.get())),
+            update_last_round(round.get()),
+            If(is_recovering(round.get())).Then(update_first_round(round.get()))
         ])
 
     @router.method(no_op=CallConfig.CALL)
-    def get(round: abi.Uint64, user_data: abi.DynamicArray[abi.Byte], *, output: abi.StaticArray[abi.Byte, Literal[32]]):
-        # TODO should we enforce output to be of certain minimum length?
+    def get(round: abi.Uint64, user_data: abi.DynamicArray[abi.Byte], *,
+            output: abi.StaticArray[abi.Byte, Literal[32]]):
+        # TODO should we enforce user_data to be of certain minimum length?
         return If(
-                    Or(
-                        # we check if the requested round is not in the valid window
-                        get_last_stored_vrf_round() < round.get(),
-                        round.get() + Int(189) * Int(8) <= get_last_stored_vrf_round()
-                    )
-                ).Then(
-                    # according to arc-0021, if the requested value can't be found 'get' returns an empty string
-                    output.decode(
-                        Bytes('')
-                    )
-                ).Else(
-                    # if the requested round is in the valid window we return the hash of the concatenation of
-                    # the vrf output of the requested round with the user seed
-                    output.decode(
-                        Sha512_256(
-                            Concat(
-                                Extract(
-                                    App.globalGet(get_slot_from_round(round.get())),
-                                    Int(32) * get_seed_cell_from_round(round.get()),
-                                    Int(32)
-                                ),
-                                user_data.encode()
-                            )
-                        )
-                    )
-                )
-
-    @router.method(no_op=CallConfig.CALL)
-    def mustGet(round: abi.Uint64, user_data: abi.DynamicArray[abi.Byte], *, output: abi.StaticArray[abi.Byte, Literal[32]]):
-        # TODO should we enforce output to be of certain minimum length?
-        return Seq([
-            # according to arc-0021, if the requested value can't be found 'mustGet' panics
-            Assert(get_last_stored_vrf_round() >= round.get()),
-            Assert(round.get() + Int(189) * Int(8) > get_last_stored_vrf_round()),
+            Not(is_round_in_valid_range(round.get()))
+        ).Then(
+            # according to arc-0021, if the requested value can't be found 'get' returns an empty byte slice
+            output.decode(
+                Bytes('')
+            )
+        ).Else(
             # if the requested round is in the valid window we return the hash of the concatenation of
             # the vrf output of the requested round with the user seed
             output.decode(
-                Sha512_256(
-                    Concat(
-                        Extract(
-                            App.globalGet(get_slot_from_round(round.get())),
-                            Int(32) * get_seed_cell_from_round(round.get()),
-                            Int(32)
-                        ),
-                        user_data.encode()
-                    )
-                )
+                get_randomness(round.get(), user_data.encode())
+            )
+        )
+
+    @router.method(no_op=CallConfig.CALL)
+    def mustGet(round: abi.Uint64, user_data: abi.DynamicArray[abi.Byte], *,
+                output: abi.StaticArray[abi.Byte, Literal[32]]):
+        # TODO should we enforce user_data to be of certain minimum length?
+        return Seq([
+            # according to arc-0021, if the requested value can't be found 'mustGet' panics
+            Assert(is_round_in_valid_range(round.get())),
+            # if the requested round is in the valid window we return the hash of the concatenation of
+            # the vrf output of the requested round with the user seed
+            output.decode(
+                get_randomness(round.get(), user_data.encode())
             )
         ])
 
