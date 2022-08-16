@@ -24,8 +24,13 @@ Note that the VRF proof can only be computed by the service after the block numb
 The smart contract adheres to [ARC-4: Algorand Application Binary Interface (ABI)](https://arc.algorand.foundation/ARCs/arc-0004) and [ARC-21: Round based datafeed oracles on Algorand](https://github.com/algorandfoundation/ARCs/pull/76)
 
 #### It implements the following methods:
-- **submit** verifies the VRF proofs and stores the corresponding VRF outputs in global storage.
-- **get** returns a pseudo-random value derived from the stored VRF output corresponding to a given round or an empty byte array in case there's no value to return.
-- **mustGet** logic is the same as **get**, but panics in case there's no value to return.
+- **create_app(uint64,byte[80],address)void**:  
+**create_app** is called only upon creation of the SC. It initiates the SC's data structure (see below) and submits the first VRF proof.
+- **submit(uint64,byte[80])void**:  
+**submit** verifies the VRF proofs and stores the corresponding VRF outputs in global storage.
+- **get(uint64,byte[])byte[32]**:  
+**get** returns a pseudo-random value derived from the stored VRF output corresponding to a given round or an empty byte array in case there's no value to return.
+- **mustGet(uint64,byte[])byte[32]**:  
+**mustGet** logic is the same as **get**, but panics in case there's no value to return.
 
 
