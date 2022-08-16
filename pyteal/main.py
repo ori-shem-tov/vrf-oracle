@@ -3,36 +3,45 @@ from typing import Literal
 
 from pyteal import *
 
+NB_OF_SLOTS = 63
+NB_OF_CELLS_PER_SLOT = 3
+NB_OF_STORED_VRF_OUTPUTS = NB_OF_SLOTS * NB_OF_CELLS_PER_SLOT
+SUBMIT_VAL_GAP = 8
+NB_RETAINED_BLOCKS = 1000
+NB_GRACE_BLOCKS = 2 * SUBMIT_VAL_GAP
+HASH_LENGTH = 32
+
 
 @Subroutine(TealType.uint64)
 def ceiling8(num: Expr):
-    return ((num + Int(7)) / Int(8)) * Int(8)
+    return ((num + Int(SUBMIT_VAL_GAP - 1)) / Int(SUBMIT_VAL_GAP)) * Int(SUBMIT_VAL_GAP)
 
 
 # return the slot number for the given round
 @Subroutine(TealType.bytes)
 def get_slot_from_round(round: Expr):
-    return Itob(((ceiling8(round) / Int(8)) % Int(189)) / Int(3))
+    return Itob(((ceiling8(round) / Int(SUBMIT_VAL_GAP)) % Int(NB_OF_STORED_VRF_OUTPUTS)) / Int(NB_OF_CELLS_PER_SLOT))
 
 
 # return the inner cell for the given round
 @Subroutine(TealType.uint64)
-def get_seed_cell_from_round(round: Expr):
-    return ((ceiling8(round) / Int(8)) % Int(189)) % Int(3)
+def get_vrf_output_cell_from_round(round: Expr):
+    return ((ceiling8(round) / Int(SUBMIT_VAL_GAP)) % Int(NB_OF_STORED_VRF_OUTPUTS)) % Int(NB_OF_CELLS_PER_SLOT)
 
 
-# a seed can be located in one of 189 cells (63 slots with 3 cells each)
+# a VRF output can be located in one of 189 cells (63 slots with 3 cells each)
 # cells are updated in a cyclic manner
 # this Subroutine updates the designated cell inside a given slot
 @Subroutine(TealType.bytes)
-def update_slot_with_new_seed(slot: Expr, seed: Expr, seed_cell_idx: Expr):
-    first = Concat(seed, Extract(slot, Int(32), Int(64)))
-    second = Concat(Extract(slot, Int(0), Int(32)), seed, Extract(slot, Int(64), Int(32)))
-    third = Concat(Extract(slot, Int(0), Int(64)), seed)
+def update_slot_with_new_vrf_output(slot: Expr, vrf_output: Expr, vrf_output_cell_idx: Expr):
+    first = Concat(vrf_output, Extract(slot, Int(HASH_LENGTH), Int(2 * HASH_LENGTH)))
+    second = Concat(Extract(slot, Int(0), Int(HASH_LENGTH)), vrf_output,
+                    Extract(slot, Int(2 * HASH_LENGTH), Int(HASH_LENGTH)))
+    third = Concat(Extract(slot, Int(0), Int(2 * HASH_LENGTH)), vrf_output)
     return Cond(
-        [seed_cell_idx == Int(0), first],
-        [seed_cell_idx == Int(1), second],
-        [seed_cell_idx == Int(2), third],
+        [vrf_output_cell_idx == Int(0), first],
+        [vrf_output_cell_idx == Int(1), second],
+        [vrf_output_cell_idx == Int(2), third],
     )
 
 
@@ -60,7 +69,7 @@ def update_first_round(first_round: Expr):
     )
 
 
-# verify the vrf proof and return the vrf output (the seed)
+# verify the VRF proof and return the VRF output
 @Subroutine(TealType.bytes)
 def verify_vrf(round: Expr, vrf_proof: Expr, vrf_pk: Expr):
     block_seed = Block.seed(round)  # as a security measure, this will fail if seed is unavailable
@@ -72,7 +81,7 @@ def verify_vrf(round: Expr, vrf_proof: Expr, vrf_pk: Expr):
     ])
 
 
-# store the vrf output (the seed) in its designated cell
+# store the VRF output in its designated cell
 @Subroutine(TealType.none)
 def store_vrf(round: Expr, vrf_output: Expr):
     slot = ScratchVar(TealType.bytes)
@@ -80,10 +89,10 @@ def store_vrf(round: Expr, vrf_output: Expr):
         slot.store(get_slot_from_round(round)),
         App.globalPut(
             slot.load(),
-            update_slot_with_new_seed(
+            update_slot_with_new_vrf_output(
                 App.globalGet(slot.load()),
                 Sha512_256(vrf_output),
-                get_seed_cell_from_round(round)
+                get_vrf_output_cell_from_round(round)
             )
         )
     ])
@@ -112,7 +121,8 @@ def init_global_state(start: Expr, length: Expr, round: Expr, vrf_pk: Expr):
         For(init, cond, itr).Do(
             App.globalPut(
                 Itob(i.load()),
-                Bytes(120 * 'a')  # we need an arbitrary value of length 120 to allow for 3 seeds per slot
+                Bytes(NB_OF_CELLS_PER_SLOT * HASH_LENGTH * 'a')
+                # we need an arbitrary value of length 120 to allow for 3 VRF outputs per slot
             )
         ),
         # store the initial round and the VRF public key in their own slot (metadata slot)
@@ -129,14 +139,13 @@ def get_first_stored_vrf_round():
 
 
 def get_vrf_pk():
-    return Extract(App.globalGet(Bytes('')), Int(16), Int(32))
+    return Extract(App.globalGet(Bytes('')), Int(16), Int(HASH_LENGTH))
 
 
 @Subroutine(TealType.uint64)
 def is_round_in_valid_range(round: Expr):
     return And(
         get_last_stored_vrf_round() >= round,
-        round + Int(189) * Int(8) > get_last_stored_vrf_round(),
         round >= get_first_stored_vrf_round()
     )
 
@@ -147,8 +156,8 @@ def get_randomness(round: Expr, user_data: Expr):
         Concat(
             Extract(
                 App.globalGet(get_slot_from_round(round)),
-                Int(32) * get_seed_cell_from_round(round),
-                Int(32)
+                Int(HASH_LENGTH) * get_vrf_output_cell_from_round(round),
+                Int(HASH_LENGTH)
             ),
             Itob(round),
             user_data
@@ -158,15 +167,13 @@ def get_randomness(round: Expr, user_data: Expr):
 
 @Subroutine(TealType.uint64)
 def is_recovering(round: Expr):
-    num_of_retained_blocks = Int(1000)
-    grace_blocks = Int(16)
     return If(
-        Global.round() + grace_blocks >= num_of_retained_blocks
+        Global.round() + Int(NB_GRACE_BLOCKS) >= Int(NB_RETAINED_BLOCKS)
     ).Then(
         And(
-            Global.round() - get_last_stored_vrf_round() > Int(1008),
-            round % Int(8) == Int(0),
-            round <= ceiling8(Global.round() + grace_blocks - num_of_retained_blocks)
+            Global.round() - get_last_stored_vrf_round() > Int(NB_RETAINED_BLOCKS + SUBMIT_VAL_GAP),
+            round % Int(SUBMIT_VAL_GAP) == Int(0),
+            round <= ceiling8(Global.round() + Int(NB_GRACE_BLOCKS) - Int(NB_RETAINED_BLOCKS))
         )
     ).Else(
         Int(0)
@@ -176,7 +183,7 @@ def is_recovering(round: Expr):
 def can_submit(round: abi.Uint64):
     return Or(
         # Submitting proofs is allowed only for subsequent rounds or in case the smart contract is stalled
-        get_last_stored_vrf_round() + Int(8) == round.get(),
+        get_last_stored_vrf_round() + Int(SUBMIT_VAL_GAP) == round.get(),
         is_recovering(round.get())
     )
 
@@ -192,11 +199,11 @@ def vrf_beacon_abi():
     @router.method(no_op=CallConfig.CREATE)
     def create_app(round: abi.Uint64, vrf_proof: abi.StaticArray[abi.Byte, Literal[80]], vrf_pk: abi.Address):
         return Seq([
-            Assert(round.get() % Int(8) == Int(0)),
-            Assert(Len(vrf_pk.get()) == Int(32)),
+            Assert(round.get() % Int(SUBMIT_VAL_GAP) == Int(0)),
+            Assert(Len(vrf_pk.get()) == Int(HASH_LENGTH)),
             #  init global state to be bytes
-            init_global_state(Int(0), Int(63), round.get(), vrf_pk.get()),
-            # verify the vrf proof and store its output in the correct slot
+            init_global_state(Int(0), Int(NB_OF_SLOTS), round.get(), vrf_pk.get()),
+            # verify the VRF proof and store its output in the correct slot
             verify_and_store_vrf(round.get(), vrf_proof.encode(), vrf_pk.get()),
         ])
 
@@ -204,11 +211,21 @@ def vrf_beacon_abi():
     def submit(round: abi.Uint64, vrf_proof: abi.StaticArray[abi.Byte, Literal[80]]):
         return Seq([
             Assert(can_submit(round)),
-            # verify the vrf proof and store its output in the correct slot
+            # verify the VRF proof and store its output in the correct slot
             verify_and_store_vrf(round.get(), vrf_proof.encode(), get_vrf_pk()),
             # update the last submitted round
             update_last_round(round.get()),
-            If(is_recovering(round.get())).Then(update_first_round(round.get()))
+            # update the first submitted round only if recovering or
+            If(
+                is_recovering(round.get())
+            ).Then(
+                update_first_round(round.get())
+            ).ElseIf(
+                get_last_stored_vrf_round() - get_first_stored_vrf_round() >= Int(
+                    NB_OF_STORED_VRF_OUTPUTS * SUBMIT_VAL_GAP)
+            ).Then(
+                update_first_round(get_last_stored_vrf_round() - Int((NB_OF_STORED_VRF_OUTPUTS - 1) * SUBMIT_VAL_GAP))
+            )
         ])
 
     @router.method(no_op=CallConfig.CALL)
@@ -224,7 +241,7 @@ def vrf_beacon_abi():
             )
         ).Else(
             # if the requested round is in the valid window we return the hash of the concatenation of
-            # the vrf output of the requested round with the user seed
+            # the VRF output of the requested round with the user input
             output.decode(
                 get_randomness(round.get(), user_data.encode())
             )
@@ -238,7 +255,7 @@ def vrf_beacon_abi():
             # according to arc-0021, if the requested value can't be found 'mustGet' panics
             Assert(is_round_in_valid_range(round.get())),
             # if the requested round is in the valid window we return the hash of the concatenation of
-            # the vrf output of the requested round with the user seed
+            # the VRF output of the requested round with the user input
             output.decode(
                 get_randomness(round.get(), user_data.encode())
             )

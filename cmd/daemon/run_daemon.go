@@ -4,6 +4,7 @@ import (
 	"container/heap"
 	"context"
 	"crypto/ed25519"
+	"crypto/rand"
 	"crypto/sha512"
 	"encoding/base64"
 	"encoding/binary"
@@ -18,7 +19,6 @@ import (
 	models2 "github.com/ori-shem-tov/vrf-oracle/models"
 	"github.com/ori-shem-tov/vrf-oracle/tools"
 	"io/ioutil"
-	"math/rand"
 	"os"
 	"strings"
 	"time"
@@ -131,11 +131,10 @@ func addGetMethodCall(atc *future.AtomicTransactionComposer, round, appID uint64
 }
 
 func getRandomUserSeed() []byte {
-	r := rand.New(rand.NewSource(time.Now().UnixNano()))
-	length := r.Intn(10)
-	var res []byte
-	for i := 0; i < length; i++ {
-		res = append(res, byte(r.Intn(256)))
+	res := make([]byte, 10)
+	_, err := rand.Read(res)
+	if err != nil {
+		panic(err)
 	}
 	return res
 }

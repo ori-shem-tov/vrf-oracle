@@ -132,8 +132,8 @@ int 3
 itob
 retsub
 
-// get_seed_cell_from_round
-getseedcellfromround_2:
+// get_vrf_output_cell_from_round
+getvrfoutputcellfromround_2:
 store 33
 load 33
 callsub ceiling8_0
@@ -145,31 +145,31 @@ int 3
 %
 retsub
 
-// update_slot_with_new_seed
-updateslotwithnewseed_3:
+// update_slot_with_new_vrf_output
+updateslotwithnewvrfoutput_3:
 store 36
 store 35
 store 34
 load 36
 int 0
 ==
-bnz updateslotwithnewseed_3_l6
+bnz updateslotwithnewvrfoutput_3_l6
 load 36
 int 1
 ==
-bnz updateslotwithnewseed_3_l5
+bnz updateslotwithnewvrfoutput_3_l5
 load 36
 int 2
 ==
-bnz updateslotwithnewseed_3_l4
+bnz updateslotwithnewvrfoutput_3_l4
 err
-updateslotwithnewseed_3_l4:
+updateslotwithnewvrfoutput_3_l4:
 load 34
 extract 0 64
 load 35
 concat
-b updateslotwithnewseed_3_l7
-updateslotwithnewseed_3_l5:
+b updateslotwithnewvrfoutput_3_l7
+updateslotwithnewvrfoutput_3_l5:
 load 34
 extract 0 32
 load 35
@@ -177,13 +177,13 @@ concat
 load 34
 extract 64 32
 concat
-b updateslotwithnewseed_3_l7
-updateslotwithnewseed_3_l6:
+b updateslotwithnewvrfoutput_3_l7
+updateslotwithnewvrfoutput_3_l6:
 load 35
 load 34
 extract 32 64
 concat
-updateslotwithnewseed_3_l7:
+updateslotwithnewvrfoutput_3_l7:
 retsub
 
 // verify_vrf
@@ -222,8 +222,8 @@ app_global_get
 load 29
 sha512_256
 load 28
-callsub getseedcellfromround_2
-callsub updateslotwithnewseed_3
+callsub getvrfoutputcellfromround_2
+callsub updateslotwithnewvrfoutput_3
 app_global_put
 retsub
 
@@ -255,7 +255,7 @@ load 38
 bz initglobalstate_7_l3
 load 41
 itob
-byte "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+byte "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 app_global_put
 load 41
 int 1
@@ -284,17 +284,6 @@ extract_uint64
 load 45
 >=
 load 45
-int 189
-int 8
-*
-+
-byte ""
-app_global_get
-int 0
-extract_uint64
->
-&&
-load 45
 byte ""
 app_global_get
 int 8
@@ -312,7 +301,7 @@ callsub getslotfromround_1
 app_global_get
 int 32
 load 46
-callsub getseedcellfromround_2
+callsub getvrfoutputcellfromround_2
 *
 int 32
 extract3
@@ -427,7 +416,40 @@ concat
 app_global_put
 load 42
 callsub isrecovering_10
-bz submit_12_l2
+bnz submit_12_l3
+byte ""
+app_global_get
+int 0
+extract_uint64
+byte ""
+app_global_get
+int 8
+extract_uint64
+-
+int 1512
+>=
+bz submit_12_l4
+byte ""
+byte ""
+app_global_get
+int 0
+extract_uint64
+itob
+byte ""
+app_global_get
+int 0
+extract_uint64
+int 1504
+-
+itob
+concat
+byte ""
+app_global_get
+extract 16 32
+concat
+app_global_put
+b submit_12_l4
+submit_12_l3:
 byte ""
 byte ""
 app_global_get
@@ -442,7 +464,7 @@ app_global_get
 extract 16 32
 concat
 app_global_put
-submit_12_l2:
+submit_12_l4:
 retsub
 
 // get
