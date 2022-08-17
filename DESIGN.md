@@ -47,9 +47,24 @@ The VRF outputs are stored in a circular array built on top of the remaining 63 
 - Each slot has a key in range [0-63].
 - Each slot is divided into 3 cells, 32 bytes each.
 
->TODO: add visuals
+>TODO: maybe add visuals
 
-The result is an array with 189 indexes where each index *i* is located in slot *floor(i/3)* and in cell *i%3*.
+The result is a circular array with 189 indexes where each index *i* is located in slot *floor(i/3)* and in cell *i%3*.
 
->TODO: add security and disaster recovery
+To store a VRF output in a cell, the SC finds the slot index based on the round of the VRF proof $$\frac{\frac{round}{8}\pmod{189}}{3}$$ and the cell index $$\frac{round}{8}\pmod{189}\pmod{3}$$ Note that the round must be a multiple of 8, which is enforced by the SC.
+
+#### Getting randomness from the SC
+In order to get randomness from the SC, a round must be supplied as input and an optional user input that would be hashed with the stored VRF output. Any round can be supplied to the SC, but since it only stores VRF outputs for rounds that are multiples of 8, the SC rounds up the round to the next multiple of 8. Note that if the SC would have round down to the previous multiple of 8, it would have been possible to know the random value for future rounds. The SC returns a hash on the concatenation of the VRF output with the round that was input by the user and the optional user input. This assures that every user can get a unique random value for every round (and not just multiples of 8).
+
+### Disaster recovery
+The SC expects every submitted VRF proof to be generated from the consecutive round to the last stored round that is a multiple of 8. This means that there cannot be gaps in between submission and if, for any reason, the service fails to submit a VRF proof it cannot skip and must try again. In addition, at the time this document was written, a smart contract on Algorand can only retrieve the seed of the previous 1000 blocks, meaning the service has only a finite number of rounds to recover in case of failure. For that reason, in case a block seed cannot be retrieved on-chain (more than 1000 blocks were added) the SC will allow the service to restart with a new round as long at its at least 984 round less then the next round that is a multiple of 8 (including the current round).
+
+### Security measures
+All private keys must be stored and handled to ensure a very high level of security and availability. In particular, they should never be stored with the code, best practices must be strictly followed.
+
+Understanding consequences:
+Security: a collusion between the block proposer and someone who knows the VRF secret key can influence the randomness. Hence, if the VRF is stolen and used by a rogue block proposer, the randomness service will be broken.
+Availability: if the VRF key is not securely backed up and lost, the service will stop forever and the oracle users may be forever locked out.
+
+
 
