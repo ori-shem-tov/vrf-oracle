@@ -19,7 +19,7 @@ NB_VRF_SLOTS = 63  # number of slots used to store VRF outputs
 NB_VRF_CELLS_PER_SLOT = 3
 NB_STORED_VRF_OUTPUTS = NB_VRF_SLOTS * NB_VRF_CELLS_PER_SLOT  # this is also the number of indexes
 
-VRF_ROUND_MULTIPLE = 8  # we only store VRF outputs for multiple of this number
+VRF_ROUND_MULTIPLE = 8  # we only store VRF outputs for rounds that are multiple of this number
 
 # Lengths of the various VRF associated values
 VRF_PK_LEN = 32
@@ -34,6 +34,12 @@ STORED_VRF_OUTPUT_LEN = 32  # length of the stored VRF output (that are truncate
 # which means submitted round <= current round - NB_RETAINED_BLOCKS + NB_GRACE_BLOCKS
 NB_RETAINED_BLOCKS = 1000
 NB_GRACE_BLOCKS = 2 * VRF_ROUND_MULTIPLE
+
+# Verify parameters are consistent
+# --------------------------------
+
+# Check NB_VRF_CELLS_PER_SLOT stored VRF outputs can fit in a value of global storage with an 8-byte key
+assert STORED_VRF_OUTPUT_LEN * NB_VRF_CELLS_PER_SLOT <= 128 - 8
 
 
 # VRF Rounds, Indexes, Slots, Cells Computation
@@ -52,6 +58,7 @@ def get_vrf_round_from_round(rnd: Expr) -> Expr:
 def get_index_from_round(rnd: Expr) -> Expr:
     """
     Return the index in which the VRF output associated to round rnd is stored
+    If the round is not a VRF round (i.e., multiple of VRF_ROUND_MULTIPLE), round up to such multiple.
     See ../DESIGN.md for definition of indexes, slots, and cells
     """
     return (get_vrf_round_from_round(rnd) / Int(VRF_ROUND_MULTIPLE)) % Int(NB_STORED_VRF_OUTPUTS)
@@ -61,6 +68,7 @@ def get_index_from_round(rnd: Expr) -> Expr:
 def get_slot_from_round(rnd: Expr) -> Expr:
     """
     Return the slot number in which the VRF output associated to round rnd is stored
+    If the round is not a VRF round (i.e., multiple of VRF_ROUND_MULTIPLE), round up to such multiple.
     See ../DESIGN.md for definition of indexes, slots, and cells
     """
     return get_index_from_round(rnd) / Int(NB_VRF_CELLS_PER_SLOT)
@@ -70,6 +78,7 @@ def get_slot_from_round(rnd: Expr) -> Expr:
 def get_cell_from_round(rnd: Expr) -> Expr:
     """
     Return the cell number (within the slot_ in which the VRF output associated to round rnd is stored
+    If the round is not a VRF round (i.e., multiple of VRF_ROUND_MULTIPLE), round up to such multiple.
     See ../DESIGN.md for definition of indexes, slots, and cells
     """
     return get_index_from_round(rnd) % Int(NB_VRF_CELLS_PER_SLOT)
@@ -137,10 +146,12 @@ def get_vrf_pk() -> Expr:
     return Extract(App.globalGet(Bytes('')), Int(16), Int(VRF_PK_LEN))
 
 
-def get_vrf_output(rnd: Expr) -> Expr:
+def get_stored_vrf_output(rnd: Expr) -> Expr:
     """
-    Return the stored VRF output for the round rnd
+    Return the stored (truncated) VRF output for the round rnd
     If rnd is not a multiple of VRF_ROUND_MULTIPLE, then round up to such a multiple
+    Assumes the round is valid (that is the VRF output for the corresponding round is actually stored).
+    This can be checked with is_round_in_valid_range
     """
     return Extract(
         App.globalGet(Itob(get_slot_from_round(rnd))),
@@ -150,14 +161,15 @@ def get_vrf_output(rnd: Expr) -> Expr:
 
 
 @Subroutine(TealType.none)
-def put_vrf_output(rnd: Expr, truncated_vrf_output: Expr):
+def put_stored_vrf_output(rnd: Expr, truncated_vrf_output: Expr):
     """
-    Store/Update the VRF output in its designated cell
-    Does not change the other VRF output
+    Store the (truncated) VRF output in its designated cell
+    Does not change the other stored VRF outputs.
     """
     slot = ScratchVar(TealType.bytes)
     print(slot.__class__)
     return Seq([
+        Assert(Len(truncated_vrf_output) == Int(STORED_VRF_OUTPUT_LEN)),
         slot.store(Itob(get_slot_from_round(rnd))),
         App.globalPut(
             slot.load(),
@@ -171,24 +183,27 @@ def put_vrf_output(rnd: Expr, truncated_vrf_output: Expr):
 
 
 @Subroutine(TealType.bytes)
-def update_slot_with_new_vrf_output(slot: Expr, vrf_output: Expr, vrf_output_cell_idx: Expr):
+def update_slot_with_new_vrf_output(slot: Expr, truncated_vrf_output: Expr, vrf_output_cell_idx: Expr):
     """
-    Return the slow value where the vrf_output_cell_idx has been replaced by vrf_output
+    Return the slot value where the vrf_output_cell_idx's cell content
+    has been replaced by truncated_vrf_output
     and the other cells are kept the same
-    Auxiliary function for put_vrf_output
+
+    Auxiliary function for put_stored_vrf_output
+    Assumes truncated_vrf_output to be STORED_VRF_OUTPUT-byte long
     """
     first = Concat(
-        vrf_output,
+        truncated_vrf_output,
         Extract(slot, Int(STORED_VRF_OUTPUT_LEN), Int(2 * STORED_VRF_OUTPUT_LEN))
     )
     second = Concat(
         Extract(slot, Int(0), Int(STORED_VRF_OUTPUT_LEN)),
-        vrf_output,
+        truncated_vrf_output,
         Extract(slot, Int(2 * STORED_VRF_OUTPUT_LEN), Int(STORED_VRF_OUTPUT_LEN))
     )
     third = Concat(
         Extract(slot, Int(0), Int(2 * STORED_VRF_OUTPUT_LEN)),
-        vrf_output
+        truncated_vrf_output
     )
     return Cond(
         [vrf_output_cell_idx == Int(0), first],
@@ -215,9 +230,8 @@ def verify_vrf(rnd: Expr, vrf_proof: Expr, vrf_pk: Expr):
     vrf_verify = VrfVerify.algorand(Sha512_256(Concat(Itob(rnd), block_seed)), vrf_proof, vrf_pk)
     return Seq([
         vrf_verify,
-        Assert(vrf_verify.output_slots[1].load() == Int(1)),
-        Log(vrf_verify.output_slots[0].load()),
-        Extract(vrf_verify.output_slots[0].load(), Int(0), Int(STORED_VRF_OUTPUT_LEN))
+        Assert(vrf_verify.output_slots[1].load() == Int(1)),  # verify the VRF proof is valid
+        Extract(vrf_verify.output_slots[0].load(), Int(0), Int(STORED_VRF_OUTPUT_LEN))  # return truncated VRF output
     ])
 
 
@@ -227,7 +241,7 @@ def verify_and_store_vrf(rnd: Expr, vrf_proof: Expr, vrf_pk: Expr):
     Verify the VRF proof and store the VRF output in the right place
     Assumes that round rnd is already a multiple of VRF_ROUND_MULTIPLE
     """
-    return put_vrf_output(
+    return put_stored_vrf_output(
         rnd,
         verify_vrf(
             rnd,
@@ -245,7 +259,7 @@ def get_random_output(rnd: Expr, user_data: Expr):
     """
     return Sha3_256(
         Concat(
-            get_vrf_output(rnd),
+            get_stored_vrf_output(rnd),
             Itob(rnd),
             user_data
         )
@@ -305,7 +319,7 @@ def is_valid_recovering_round(rnd: Expr):
     return And(
         # rounds must be multiple of VRF_ROUND_MULTIPLE
         rnd % Int(VRF_ROUND_MULTIPLE) == Int(0),
-        # there is a gap between provided => we are in recovery
+        # there is a gap between expected next VRF round and provided VRF round => we are in recovery
         rnd > get_last_round_stored() + Int(VRF_ROUND_MULTIPLE),
         # the round provided is as early as possible bare the grace period
         (rnd + Int(NB_RETAINED_BLOCKS)) <= (Global.round() + Int(NB_GRACE_BLOCKS))
@@ -316,7 +330,7 @@ def can_submit(rnd: Expr):
     """
     Return whether the VRF service can submit a VRF proof for the round rnd.
 
-    Submitting proofs is allowed only for subsequent rounds
+    Submitting proofs is allowed only for the following VRF round (last round + VRF_ROUND_MULTIPLE)
     OR when we're recovering
     """
     return Or(
@@ -349,6 +363,8 @@ def vrf_beacon_abi():
             vrf_proof: abi.StaticBytes[Literal[VRF_PROOF_LEN]],
             vrf_pk: abi.StaticBytes[Literal[VRF_PK_LEN]]
     ):
+        # Since no_op=CallConfig.CREATE, this call can only be made at application creation.
+        # This is very important, otherwise anyone could reset the beacon VRF and that would be insecure!
         return Seq([
             # it is very important we check we are a multiple of VRF_ROUND_MULTIPLE here
             # otherwise we may be forever shifted
@@ -365,16 +381,23 @@ def vrf_beacon_abi():
             round: abi.Uint64,  # pylint: disable=W0622
             vrf_proof: abi.StaticBytes[Literal[VRF_PROOF_LEN]]
     ):
+        # Note that anyone can call this function, which is what we want.
+        # In case the account used by the VRF service gets compromised, the VRF service can switch to a new one
+        # completely seamlessly.
+        is_recovering = ScratchVar(TealType.uint64)
         return Seq([
             # verify this block can be submitted
             Assert(can_submit(round.get())),
+            # store whether we are in recovery mode or not
+            # note that this is important to store it there, because updates to last round makes it no more in recovery
+            is_recovering.store(is_valid_recovering_round(round.get())),
             # verify the VRF proof and store its output in the correct slot/cell
             verify_and_store_vrf(round.get(), vrf_proof.get(), get_vrf_pk()),
             # update the last submitted round
             put_last_round_stored(round.get()),
             # update the first submitted round
             If(
-                is_valid_recovering_round(round.get())
+                is_recovering.load()
             ).Then(
                 # if recovering, now the current round is the first round
                 put_first_round_stored(round.get())

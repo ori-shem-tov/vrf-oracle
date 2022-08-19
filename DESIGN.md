@@ -60,6 +60,9 @@ The smart contract implements the following methods:
 - `must_get(uint64,byte[])byte[]`:  
   `must_get` logic is the same as `get`, but panics in case there's no value to return.
 
+Note that `submit` has a high opcode cost (higher than 700).
+It needs to be called in a group of enough transactions so the available opcode cost is high enough.
+
 #### Data storage: Indexes, Slots and Cells
 
 At the time this document was written, a smart contract on Algorand can store up to 64 key-value pairs in its global storage (annotated **slots**) where each slot can store up to 128 bytes.

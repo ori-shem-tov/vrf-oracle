@@ -144,10 +144,15 @@ int 3
 %
 retsub
 
-// put_vrf_output
-putvrfoutput_3:
+// put_stored_vrf_output
+putstoredvrfoutput_3:
 store 24
 store 23
+load 24
+len
+int 32
+==
+assert
 load 23
 callsub getslotfromround_1
 itob
@@ -224,8 +229,6 @@ int 1
 ==
 assert
 load 35
-log
-load 35
 extract 0 32
 retsub
 
@@ -239,27 +242,27 @@ load 20
 load 21
 load 22
 callsub verifyvrf_5
-callsub putvrfoutput_3
+callsub putstoredvrfoutput_3
 retsub
 
 // get_random_output
 getrandomoutput_7:
+store 45
 store 44
-store 43
-load 43
+load 44
 callsub getslotfromround_1
 itob
 app_global_get
 int 32
-load 43
+load 44
 callsub getcellfromround_2
 *
 int 32
 extract3
-load 43
+load 44
 itob
 concat
-load 44
+load 45
 concat
 sha3_256
 retsub
@@ -298,15 +301,15 @@ retsub
 
 // is_round_in_valid_range
 isroundinvalidrange_9:
-store 45
-load 45
+store 46
+load 46
 callsub getvrfroundfromround_0
 byte ""
 app_global_get
 int 0
 extract_uint64
 <=
-load 45
+load 46
 callsub getvrfroundfromround_0
 byte ""
 app_global_get
@@ -318,13 +321,13 @@ retsub
 
 // is_valid_recovering_round
 isvalidrecoveringround_10:
-store 42
-load 42
+store 43
+load 43
 int 8
 %
 int 0
 ==
-load 42
+load 43
 byte ""
 app_global_get
 int 0
@@ -333,7 +336,7 @@ int 8
 +
 >
 &&
-load 42
+load 43
 int 1000
 +
 global Round
@@ -385,6 +388,9 @@ callsub isvalidrecoveringround_10
 ||
 assert
 load 40
+callsub isvalidrecoveringround_10
+store 42
+load 40
 load 41
 byte ""
 app_global_get
@@ -404,8 +410,7 @@ app_global_get
 extract 16 32
 concat
 app_global_put
-load 40
-callsub isvalidrecoveringround_10
+load 42
 bnz submit_12_l3
 byte ""
 app_global_get
