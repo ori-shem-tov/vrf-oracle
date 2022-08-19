@@ -4,37 +4,37 @@ import (
 	"container/heap"
 	"context"
 	"crypto/ed25519"
+	"crypto/rand"
 	"crypto/sha512"
 	"encoding/base64"
 	"encoding/binary"
 	"fmt"
-	"github.com/algorand/go-algorand-sdk/abi"
-	"github.com/algorand/go-algorand-sdk/client/v2/algod"
-	"github.com/algorand/go-algorand-sdk/client/v2/common/models"
-	"github.com/algorand/go-algorand-sdk/crypto"
-	"github.com/algorand/go-algorand-sdk/encoding/msgpack"
-	"github.com/algorand/go-algorand-sdk/future"
-	"github.com/algorand/go-algorand-sdk/types"
-	"github.com/ori-shem-tov/vrf-oracle/libsodium-wrapper"
-	models2 "github.com/ori-shem-tov/vrf-oracle/models"
-	"github.com/ori-shem-tov/vrf-oracle/tools"
 	"io/ioutil"
 	"os"
 	"strings"
 	"time"
 
-	log "github.com/sirupsen/logrus"
-	"github.com/spf13/pflag"
-
+	"github.com/algorand/go-algorand-sdk/abi"
+	"github.com/algorand/go-algorand-sdk/client/v2/algod"
+	"github.com/algorand/go-algorand-sdk/client/v2/common/models"
+	"github.com/algorand/go-algorand-sdk/crypto"
+	"github.com/algorand/go-algorand-sdk/future"
 	"github.com/algorand/go-algorand-sdk/mnemonic"
+	"github.com/algorand/go-algorand-sdk/types"
+	log "github.com/sirupsen/logrus"
 	"github.com/spf13/cobra"
+	"github.com/spf13/pflag"
+	"golang.org/x/crypto/sha3"
+
+	"github.com/ori-shem-tov/vrf-oracle/libsodium-wrapper"
+	models2 "github.com/ori-shem-tov/vrf-oracle/models"
+	"github.com/ori-shem-tov/vrf-oracle/tools"
 )
 
 var (
 	appCreatorMnemonic      string
 	approvalProgramFilename string
 	clearProgramFilename    string
-	signingMnemonicString   string // the mnemonic for signing vrf responses
 	vrfMnemonicString       string // the mnemonic for generating the vrf
 	serviceMnemonicString   string // the mnemonic for the service account (used to send responses to the smart-contract)
 	startingRound           uint64 // the round from which the daemon starts scanning
@@ -44,7 +44,7 @@ var (
 )
 
 const (
-	waitBetweenBlocksMS = 4500
+	waitBetweenBlocksMS = 100
 	numOfDummyTxns      = 10
 )
 
@@ -69,10 +69,6 @@ func SetLogger() {
 func init() {
 	SetLogger()
 
-	RunDaemonCmd.Flags().StringVar(&signingMnemonicString, "signing-mnemonic", "",
-		"25-word mnemonic of the oracle for signing (required)")
-	MarkFlagRequired(RunDaemonCmd.Flags(), "signing-mnemonic")
-
 	RunDaemonCmd.Flags().StringVar(&vrfMnemonicString, "vrf-mnemonic", "",
 		"25-word mnemonic of the oracle for computing vrf (required)")
 	MarkFlagRequired(RunDaemonCmd.Flags(), "vrf-mnemonic")
@@ -81,7 +77,7 @@ func init() {
 		"25-word mnemonic of the service for writing the response (required)")
 	MarkFlagRequired(RunDaemonCmd.Flags(), "service-mnemonic")
 
-	RunDaemonCmd.Flags().Uint64Var(&startingRound, "round", 0,
+	RunDaemonCmd.Flags().Uint64Var(&startingRound, "starting-round", 0,
 		"the round to start scanning from (optional. default: current round)")
 
 	RunDaemonCmd.Flags().StringVar(&appCreatorMnemonic, "app-creator-mnemonic", "", "25-word mnemonic of the app creator (required)")
@@ -104,9 +100,10 @@ func computeWaitFactor(roundFromIndexer uint64, roundToFetch uint64) float64 {
 	return 1 / float64(roundFromIndexer-roundToFetch)
 }
 
-func addGetMethodCall(atc *future.AtomicTransactionComposer, round, appID uint64, serviceAccount crypto.Account, sp types.SuggestedParams) error {
+func addGetMethodCall(atc *future.AtomicTransactionComposer, round, appID uint64, serviceAccount crypto.Account,
+	sp types.SuggestedParams, userSeed []byte) error {
 	signer := future.BasicAccountTransactionSigner{Account: serviceAccount}
-	methodSig := "get(uint64,string)string"
+	methodSig := "get(uint64,byte[])byte[]"
 	method, err := abi.MethodFromSignature(methodSig)
 	if err != nil {
 		return fmt.Errorf("error abi.MethodFromSignature(methodSig) %v", err)
@@ -114,7 +111,7 @@ func addGetMethodCall(atc *future.AtomicTransactionComposer, round, appID uint64
 	methodCallParams := future.AddMethodCallParams{
 		AppID:           appID,
 		Method:          method,
-		MethodArgs:      []interface{}{round, ""},
+		MethodArgs:      []interface{}{round, userSeed},
 		Sender:          serviceAccount.Address,
 		SuggestedParams: sp,
 		OnComplete:      0,
@@ -134,15 +131,63 @@ func addGetMethodCall(atc *future.AtomicTransactionComposer, round, appID uint64
 	return nil
 }
 
+func getRandomUserSeed() []byte {
+	res := make([]byte, 10)
+	_, err := rand.Read(res)
+	if err != nil {
+		panic(err)
+	}
+	return res
+}
+
+func runSomeTests(round, appID uint64, serviceAccount crypto.Account, vrfOutput []byte, sp types.SuggestedParams,
+	algodClient *algod.Client) {
+	var atc future.AtomicTransactionComposer
+	userSeed := getRandomUserSeed()
+	err := addGetMethodCall(&atc, round, appID, serviceAccount, sp, userSeed)
+	if err != nil {
+		log.Errorf("error in addGetMethodCall for round %d: %v", round, err)
+		return
+	}
+	result, err := atc.Execute(algodClient, context.Background(), 3)
+	if err != nil {
+		log.Errorf("error in atc.Execute for round %d: %v", round, err)
+		return
+	}
+	if len(result.MethodResults) < 1 {
+		log.Errorf("didn't get MethodResults for round %d", round)
+		return
+	}
+
+	// Verify the random output matches what it should be
+	roundBytes := make([]byte, 8)
+	binary.BigEndian.PutUint64(roundBytes, round)
+	storedVRFOutput := vrfOutput[:32] // we truncate the VRF output to 32 bytes
+
+	log.Debugf("stored VRF output should be: %v", base64.StdEncoding.EncodeToString(storedVRFOutput))
+
+	hashedOutput := sha3.Sum256(append(storedVRFOutput[:], append(roundBytes, userSeed...)...))
+	// ABI adds 0x0020 at the beginning, as it's the length of the output
+	abiHashedOutputB64 := base64.StdEncoding.EncodeToString(append([]byte{0x00, 0x20}, hashedOutput[:]...))
+	log.Debugf("hashed output (b64) for round %d is %v", round, abiHashedOutputB64)
+
+	b64Returned := base64.StdEncoding.EncodeToString(result.MethodResults[0].RawReturnValue)
+	if abiHashedOutputB64 != b64Returned {
+		log.Errorf("outputs don't match for round %d TXID %s %s != %s", round, result.TxIDs[0], b64Returned, abiHashedOutputB64)
+		return
+	}
+	log.Debugf("passed tests: ABI hashed output (b64) for round %d is %v", round, abiHashedOutputB64)
+}
+
 // generates a group of 3 application calls:
 // the 1st App call is to the smart-contract to respond the VRF output, while the 2nd and 3rd are dummy app calls used
 // to increase the cost pool.
 func buildAnswerPhaseTransactionsGroupABI(appID, dummyAppID uint64, serviceAccount crypto.Account, vrfRequest models2.VrfRequest,
-	vrfOutput []byte, sp types.SuggestedParams) ([]byte, error) {
+	vrfProof []byte, sp types.SuggestedParams) ([]byte, error) {
 
 	var atc future.AtomicTransactionComposer
 	signer := future.BasicAccountTransactionSigner{Account: serviceAccount}
-	methodSig := "submit(uint64,string)void"
+	methodSig := "submit(uint64,byte[80])void"
 	method, err := abi.MethodFromSignature(methodSig)
 	if err != nil {
 		return nil, fmt.Errorf("error abi.MethodFromSignature(methodSig) %v", err)
@@ -150,10 +195,12 @@ func buildAnswerPhaseTransactionsGroupABI(appID, dummyAppID uint64, serviceAccou
 	sp.FirstRoundValid = types.Round(vrfRequest.BlockNumber + 1)
 	sp.LastRoundValid = sp.FirstRoundValid + 1000
 	log.Debugf("starting round %d", vrfRequest.BlockNumber)
+	var vrfProofArray [80]byte
+	copy(vrfProofArray[:], vrfProof)
 	methodCallParams := future.AddMethodCallParams{
 		AppID:           appID,
 		Method:          method,
-		MethodArgs:      []interface{}{vrfRequest.BlockNumber, string(vrfOutput)},
+		MethodArgs:      []interface{}{vrfRequest.BlockNumber, vrfProofArray},
 		Sender:          serviceAccount.Address,
 		SuggestedParams: sp,
 		OnComplete:      0,
@@ -196,19 +243,10 @@ func buildAnswerPhaseTransactionsGroupABI(appID, dummyAppID uint64, serviceAccou
 			return nil, fmt.Errorf("error atc.AddTransaction(future.TransactionWithSigner{ %v", err)
 		}
 	}
-	err = addGetMethodCall(&atc, vrfRequest.BlockNumber, appID, serviceAccount, sp)
-	if err != nil {
-		return nil, fmt.Errorf("error addGetMethodCall(&atc, vrfRequest.BlockNumber, appID, serviceAccount, sp) %v", err)
-	}
 	stxsSlice, err := atc.GatherSignatures()
-	lastStx := stxsSlice[len(stxsSlice)-1]
-	var lastObj types.SignedTxn
-	err = msgpack.Decode(lastStx, &lastObj)
 	if err != nil {
-		return nil, fmt.Errorf("error msgpack.Decode(lastStx, &lastObj) %v", err)
+		return nil, fmt.Errorf("error in atc.GatherSignatures: %w", err)
 	}
-	lastTxID := crypto.GetTxID(lastObj.Txn)
-	log.Debugf("last TXID is %s", lastTxID)
 	var stxBytes []byte
 	for _, stx := range stxsSlice {
 		stxBytes = append(stxBytes, stx...)
@@ -257,11 +295,7 @@ func handleRequestsForCurrentRound(requestsToHandle []models2.VrfRequest, blockS
 			log.Warnf("failed computing vrf for %v: %v. skipping...", currentRequestHandled, err)
 			continue
 		}
-		toHash := vrfOutput
-		hashedOutput := sha512.Sum512_256(toHash)
-		hashedOutput = sha512.Sum512_256(hashedOutput[:])
-		hashedOutputB64 := base64.StdEncoding.EncodeToString(hashedOutput[:])
-		log.Debugf("hashed output (b64) for round %d is %v", currentRequestHandled.BlockNumber, hashedOutputB64)
+
 		stxBytes, err := buildAnswerPhaseTransactionsGroupABI(
 			appID,
 			dummyAppID,
@@ -288,6 +322,7 @@ func handleRequestsForCurrentRound(requestsToHandle []models2.VrfRequest, blockS
 			//log.Debugf("stxbytes bas64: %v", base64.StdEncoding.EncodeToString(stxBytes))
 			continue
 		}
+		runSomeTests(currentRequestHandled.BlockNumber, appID, serviceAccount, vrfOutput, suggestedParams, algodClient)
 		log.Infof("Sent transaction %s", txId)
 
 	}
@@ -495,17 +530,19 @@ func createABIApp(startingRound, dummyAppID uint64, algodClient *algod.Client, v
 		return 0, fmt.Errorf("error crypto.AccountFromPrivateKey(appCreatorPrivateKey) %v", err)
 	}
 	signer := future.BasicAccountTransactionSigner{Account: appCreatorAccount}
-	methodSig := "create_app(uint64,string,address)void"
+	methodSig := "create_app(uint64,byte[80],byte[32])void"
 	method, err := abi.MethodFromSignature(methodSig)
 	if err != nil {
 		return 0, fmt.Errorf("error abi.MethodFromSignature(methodSig) %v", err)
 	}
 	suggestedParams.FirstRoundValid = types.Round(startingRound + 1)
 	suggestedParams.LastRoundValid = suggestedParams.FirstRoundValid + 1000
+	var vrfProofArray [80]byte
+	copy(vrfProofArray[:], vrfProof)
 	methodCallParams := future.AddMethodCallParams{
 		AppID:           0,
 		Method:          method,
-		MethodArgs:      []interface{}{startingRound, string(vrfProof), vrfPrivateKey[32:]},
+		MethodArgs:      []interface{}{startingRound, vrfProofArray, vrfPrivateKey[32:]},
 		Sender:          appCreatorAccount.Address,
 		SuggestedParams: suggestedParams,
 		OnComplete:      0,
@@ -553,6 +590,9 @@ func createABIApp(startingRound, dummyAppID uint64, algodClient *algod.Client, v
 		}
 	}
 	stxsSlice, err := atc.GatherSignatures()
+	if err != nil {
+		return 0, fmt.Errorf("error in atc.GatherSignatures: %w", err)
+	}
 	var stxBytes []byte
 	for _, stx := range stxsSlice {
 		stxBytes = append(stxBytes, stx...)
@@ -571,10 +611,12 @@ func createABIApp(startingRound, dummyAppID uint64, algodClient *algod.Client, v
 }
 
 func compileTeal(approvalProgramFilename, clearProgramFilename string, algodClient *algod.Client) ([]byte, []byte, error) {
+	// #nosec G304
 	approval, err := ioutil.ReadFile(approvalProgramFilename)
 	if err != nil {
 		return nil, nil, err
 	}
+	// #nosec G304
 	clear, err := ioutil.ReadFile(clearProgramFilename)
 	if err != nil {
 		return nil, nil, err
@@ -719,6 +761,10 @@ var RunDaemonCmd = &cobra.Command{
 			return
 		}
 		serviceAddress, err := crypto.GenerateAddressFromSK(servicePrivateKey)
+		if err != nil {
+			log.Errorf("error in crypto.GenerateAddressFromSK: %v", err)
+			return
+		}
 		serviceAccount := crypto.Account{
 			PrivateKey: servicePrivateKey,
 			Address:    serviceAddress,
@@ -759,6 +805,17 @@ var RunDaemonCmd = &cobra.Command{
 			return
 		}
 		log.Infof("app id: %d\n", appID)
+		res, err := algodClient.GetApplicationByID(appID).Do(context.Background())
+		if err != nil {
+			log.Error(err)
+			return
+		}
+		for _, kv := range res.Params.GlobalState {
+			if kv.Key == "" {
+				log.Infof("metdata is %s", kv.Value.Bytes)
+				break
+			}
+		}
 
 		startingRound += 8
 

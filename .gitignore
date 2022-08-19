@@ -17,3 +17,6 @@
 *.idea/
 copies
 libs
+
+venv
+venv.old

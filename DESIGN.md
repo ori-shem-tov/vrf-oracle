@@ -16,7 +16,7 @@ The service holds a VRF secret key, and uses it to periodically compute a VRF pr
 A new VRF proof is computed once every 8 rounds and then submitted to the smart contract.
 
 Specs:  
-- The input to the VRF computation is `round|block_seed` where:
+- The input to the VRF computation is `SHA-512/256(round|block_seed)` where:
   - `round` is the round of the computation (8 bytes, big endian). Must be a multiple of 8.
   - `block_seed` is the seed taken from block number == `round` (8 bytes, big endian).
   - `|` is the concatenation operator.
@@ -50,16 +50,20 @@ Due to that, we only require VRF proofs to be given every 8 rounds, which means 
 #### ABI Interface
 
 The smart contract implements the following methods:  
-- `create_app(uint64,byte[80],address)void`:  
+- `create_app(uint64,byte[80],byte[32])void`:  
   `create_app` is called only upon creation of the SC. It initiates the SC's data structure (see below) and submits the first VRF proof.
 - `submit(uint64,byte[80])void`:  
   `submit` verifies the VRF proofs and stores the corresponding VRF outputs in global storage.
 - `get(uint64,byte[])byte[]`:  
-  `get` returns a pseudo-random value derived from the stored VRF output corresponding to a given round or an empty byte array in case there's no value to return.
-- `mustGet(uint64,byte[])byte[]`:  
-  `mustGet` logic is the same as `get`, but panics in case there's no value to return.
+  `get` returns a 32-byte pseudo-random value derived from the stored VRF output corresponding to a given round or an empty byte array in case there's no value to return.
+  Note that the ABI convention prefixes the output by its length (as the type is `[]byte`), that is `0x0020`. 
+- `must_get(uint64,byte[])byte[]`:  
+  `must_get` logic is the same as `get`, but panics in case there's no value to return.
 
-#### Data storage: Slots and Cells
+Note that `submit` has a high opcode cost (higher than 700).
+It needs to be called in a group of enough transactions so the available opcode cost is high enough.
+
+#### Data storage: Indexes, Slots and Cells
 
 At the time this document was written, a smart contract on Algorand can store up to 64 key-value pairs in its global storage (annotated **slots**) where each slot can store up to 128 bytes.
 
@@ -71,13 +75,14 @@ The SC stores the following data:
 The **public key** and the **first** and **last** rounds are stored in the **main** slot which is the slot with an empty string as its key. The value stored in this slot is `last_round|first_round|public_key` where the `|` is the concatenation operator and `last_round` and `first_round` are encoded as 8 bytes in big endian.
 
 The VRF outputs are stored in a circular array built on top of the remaining 63 slots, as follows:  
-- Each slot has a 1-byte key in range [0-63].
+- Each slot has a 8-byte key in range [0-63] (big endian, 0-padded)
 - Each slot is divided into 3 cells, 32 bytes each.
 
 >TODO: maybe add visuals
 
 The result is a circular array with 189 indexes where each index `i` is located in slot `floor(i/3)` and in cell `i%3`.
 
+Since VRF outputs have 64 bytes, VRF outputs are first truncated to 32 bytes.
 To store a VRF output for round $round$ in a cell, the SC finds the slot index based on the round of the VRF proof $$\frac{\frac{round}{8}\bmod{189}}{3}$$ and the cell index $$\frac{round}{8}\bmod{189}\bmod{3}.$$ 
 Note that the round must be a multiple of 8, which is enforced by the SC.
 
@@ -88,7 +93,7 @@ The caller can also specify an optional user input `user_input`.
 The returned value is:
 
 ```
-SHA3(VRF_output[round_ceil8] | round | user_input)
+SHA3-256(VRF_output[round_ceil8] | round | user_input)
 ```
 
 where:
@@ -107,7 +112,7 @@ The use of ceiling up (for `round_ceil8`) is to ensure that the random value for
 
 ### Disaster recovery
 
-The SC expects every submitted VRF proof to be generated from the consecutive round to the last stored round that is a multiple of 8. This means that there cannot be gaps in between submission and if, for any reason, the service fails to submit a VRF proof it cannot skip and must try again. In addition, at the time this document was written, a smart contract on Algorand can only retrieve the seed of the previous 1000 blocks, meaning the service has only a finite number of rounds to recover in case of failure. For that reason, in case a block seed cannot be retrieved on-chain (more than 1000 blocks were added) the SC will allow the service to restart with a new round as long at its at least 984 round less then the next round that is a multiple of 8 (including the current round).
+The SC expects every submitted VRF proof to be generated from the consecutive round to the last stored round that is a multiple of 8. This means that there cannot be gaps in between submission and if, for any reason, the service fails to submit a VRF proof it cannot skip and must try again. In addition, at the time this document was written, a smart contract on Algorand can only retrieve the seed of the previous 1000 blocks, meaning the service has only a finite number of rounds to recover in case of failure. For that reason, in case a block seed cannot be retrieved on-chain (more than 1000 blocks were added) the SC will allow the service to restart with a new round as long at its at least 984 round less then the current round.
 
 984 is chosen to give some flexbility to the service while trying to ensure that the gap (where no random values can be computed) is as small as possible.
 

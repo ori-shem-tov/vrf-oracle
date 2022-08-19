@@ -4,25 +4,48 @@
 
 This project demonstrates a POC of a VRF oracle on Algorand's blockchain.
 
-Written in `Go` and `pyteal`.
+The project has two parts:
+* VRF smart contract in `pyteal/main.py` (PyTeal)
+* VRF service in `Go`
 
 It uses the same VRF implementation used by the `crypto` package in `go-algorand`.
 
-The `Go` component acts as a beacon and computes a pseudo random value (using VRF) for every round that is a multiple of 8. Its code can be found under `cmd/daemon`.
+The VRF service acts as a beacon and computes a pseudo random value (using VRF) for every round that is a multiple of 8. Its code can be found under `cmd/daemon`.
 
 ** It also sends periodic zero amount transactions as a workaround for a weird issue where no blocks are added when there are no transactions.
 
-The smart-contract supports 4 commands:
-- **request** - Request for VRF value.
-- **respond** - Respond the VRF computation. Sent from an address used by the service, stored in global storage upon creation.
+Design is detailed in [./DESIGN.md](DESIGN.md).
 
-`pyteal` code can be found in `pyteal/main.py`.
+The code uses the same VRF implementation used by the `crypto` package in `go-algorand`.
+
+## Requirements
+
+### Requirements for smart contract
+
+Python 3.10
+
+### Requirements for VRF service
+
+Go 1.14 or newer, as well as usual tools to allow compilation (C compiler, autoconf, make, ...)
+
+### Requirements for developing
+
+- `pylint`: `python3 -m pip install pylint`
+- `golangci-lint`
+    - on Ubuntu: https://golangci-lint.run/usage/install/#local-installation
+      (note that you must have a single folder in your `$GOPATH` if you run the proposed command)
+    - on macOS: `brew install golangci-lint`
+- `gosec`
+    - on Ubuntu: https://github.com/securego/gosec#local-installation
+    - on macOS: `brew install gosec`
+
 
 ## Build
 
 ### Build libsodium from fork
 
 ```sh
+git submodule update --init
 make build-libsodium
 ```
 
@@ -42,20 +65,26 @@ This service can take the following arguments:
       --app-creator-mnemonic string   25-word mnemonic of the app creator (required)
       --approval-program string       TEAL script of the approval program (required)
       --clear-program string          TEAL script of the clear program (required)
-      --round uint                    the round to start scanning from (optional. default: current round)
+      --starting-round uint           the round to start scanning from (optional. default: current round)
       --service-mnemonic string       25-word mnemonic of the service for writing the response (required)
-      --signing-mnemonic string       25-word mnemonic of the oracle for signing (required)
       --vrf-mnemonic string           25-word mnemonic of the oracle for computing vrf (required)
 ```
 
 `service-mnemonic` account should be funded to cover transaction fees.
 
-Please note that `signing-mnemonic` account is used to sign the VRF proof and that the signature is passed to the smart contract **but the smart contract is not validating it**. Therefore, the `signing-mnemonic` arg should be **REMOVED** in the final implementation.
-
 ### Execute
 
 ```sh
 go run ./cmd run-daemon <ARGUMENTS>
+```
+
+`run-daemon` does not re-generate the TEAL files from PyTEAL.
+You need to re-generate those when updating the smart contract.
+
+```
+cd pyteal
+pip install -r requirements.txt
+python3 main.py
 ```
 
 ## Test
@@ -64,29 +93,30 @@ go run ./cmd run-daemon <ARGUMENTS>
 
 - Launch instance of Algorand's `node` and set environment variables
 
-This code was tested with `Sandbox`'s [fork](https://github.com/ori-shem-tov/sandbox) on branch `avm-randomness`.
+This code currently (in Aug 2022) requires the use of sandbox on the beta config.
 
 ```shell
-./sandbox version
-
+$ ./sandbox version
 algod version
-12885645221
-3.9.153509.dev [master] (commit #d7ed271c)
+WARN[0000] The "INDEXER_ENABLE_ALL_PARAMETERS" variable is not set. Defaulting to a blank string.
+12885491713
+3.9.1.beta [rel/beta] (commit #379ec4f8)
 go-algorand is licensed with AGPLv3.0
 source code available at https://github.com/algorand/go-algorand
 
 Indexer version
-2.13.0-dev.unknown compiled at 2022-08-07T09:39:45+0000 from git hash 6b61b08bcbaed5a994b9a68ac0bf40c1b902cca4 (modified)
+WARN[0000] The "INDEXER_ENABLE_ALL_PARAMETERS" variable is not set. Defaulting to a blank string.
+2.13.0-dev.unknown compiled at 2022-08-19T14:22:17+0000 from git hash dc8f994530ad84ac84d3a21ad7b8965e06e718f8 (modified)
 
 Postgres version
-postgres (PostgreSQL) 13.6
+WARN[0000] The "INDEXER_ENABLE_ALL_PARAMETERS" variable is not set. Defaulting to a blank string.
+postgres (PostgreSQL) 13.3
 ```
 
 Use the following command to launch `Sandbox`:
 ```shell
-./sandbox up source -v
+./sandbox up beta -v
 ```
-Make sure that `algod` image is built from `go-algorand` commit [d7ed271c](https://github.com/algorand/go-algorand/tree/d7ed271c08b43708f07911589024a318deadca94) on branch `master`.
 
 Set environment variables:
 ```shell
@@ -103,11 +133,15 @@ Using `./sandbox goal clerk send` command, fund the service account `LWOXAHEF32I
 ```shell
 export VRF_LOG_LEVEL=debug  # optional but recommended
 go run ./cmd run-daemon \
---signing-mnemonic "tobacco bottom online arch street good gain sting wrap power scissors unique common shoe sunny unaware bind jewel stock polar radio world liberty about village" \
 --vrf-mnemonic "boil frequent harvest donkey outside start thought road insane wine tooth fame assault any advice belt walk again proud debate culture omit diary able treat" \
 --service-mnemonic "chat glory west mobile desk coin hockey swallow tilt chunk task model hidden helmet toddler tortoise always afraid absorb valve bar distance history absorb exercise" \
 --app-creator-mnemonic "chat glory west mobile desk coin hockey swallow tilt chunk task model hidden helmet toddler tortoise always afraid absorb valve bar distance history absorb exercise" \
 --approval-program pyteal/vrf_beacon_abi_approval.teal \
 --clear-program pyteal/vrf_beacon_abi_clear.teal \
---round 8
+--starting-round 8
 ```
+
+## Misc notes
+
+We use a version of PyTeal that merge https://github.com/algorand/pyteal/pull/514
+When this PR is merged to a released version of PyTeal, `pyteal/requirements.txt` needs to be updated.
