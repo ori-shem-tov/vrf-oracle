@@ -13,7 +13,7 @@
                     "name": "vrf_proof"
                 },
                 {
-                    "type": "address",
+                    "type": "byte[32]",
                     "name": "vrf_pk"
                 }
             ],
@@ -50,11 +50,11 @@
                 }
             ],
             "returns": {
-                "type": "byte[32]"
+                "type": "byte[]"
             }
         },
         {
-            "name": "mustGet",
+            "name": "must_get",
             "args": [
                 {
                     "type": "uint64",
@@ -66,10 +66,9 @@
                 }
             ],
             "returns": {
-                "type": "byte[32]"
+                "type": "byte[]"
             }
         }
     ],
-    "desc": null,
     "networks": {}
 }

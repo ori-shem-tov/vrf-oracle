@@ -55,7 +55,8 @@ The smart contract implements the following methods:
 - `submit(uint64,byte[80])void`:  
   `submit` verifies the VRF proofs and stores the corresponding VRF outputs in global storage.
 - `get(uint64,byte[])byte[]`:  
-  `get` returns a pseudo-random value derived from the stored VRF output corresponding to a given round or an empty byte array in case there's no value to return.
+  `get` returns a 32-byte pseudo-random value derived from the stored VRF output corresponding to a given round or an empty byte array in case there's no value to return.
+  Note that the ABI convention prefixes the output by its length (as the type is `[]byte`), that is `0x0020`. 
 - `must_get(uint64,byte[])byte[]`:  
   `must_get` logic is the same as `get`, but panics in case there's no value to return.
 

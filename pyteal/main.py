@@ -1,43 +1,195 @@
+"""
+PyTEAL smart contracts for VRF oracle
+
+See ../DESIGN.md for design details
+"""
+
+# pylint: disable=W0401,W0614
+# W0401 is wildcard-import
+# W0614 is unused-wildcard-import
+# W0622 is redefined-builtin -> due to the fact we need to use "round" as argument for ABI
+
 import json
 from typing import Literal
 
 from pyteal import *
 
-NB_OF_SLOTS = 63
-NB_OF_CELLS_PER_SLOT = 3
-NB_OF_STORED_VRF_OUTPUTS = NB_OF_SLOTS * NB_OF_CELLS_PER_SLOT
-SUBMIT_VAL_GAP = 8
+# See ../DESIGN.md for definition of indexes, slots, and cells
+NB_VRF_SLOTS = 63  # number of slots used to store VRF outputs
+NB_VRF_CELLS_PER_SLOT = 3
+NB_STORED_VRF_OUTPUTS = NB_VRF_SLOTS * NB_VRF_CELLS_PER_SLOT  # this is also the number of indexes
+
+VRF_ROUND_MULTIPLE = 8  # we only store VRF outputs for multiple of this number
+
+# Lengths of the various VRF associated values
+VRF_PK_LEN = 32
+VRF_PROOF_LEN = 80
+STORED_VRF_OUTPUT_LEN = 32  # length of the stored VRF output (that are truncated)
+
+# This part is for the recovery parameters
+# In case no VRF proof was submitted for too long, there will be a gap
+# in the rounds for which random outputs can be provided
+# To get this gap as small as possible, the VRF proof submitter
+# is required to submit a VRF proof as old as possible, minus the grace period
+# which means submitted round <= current round - NB_RETAINED_BLOCKS + NB_GRACE_BLOCKS
 NB_RETAINED_BLOCKS = 1000
-NB_GRACE_BLOCKS = 2 * SUBMIT_VAL_GAP
-HASH_LENGTH = 32
+NB_GRACE_BLOCKS = 2 * VRF_ROUND_MULTIPLE
+
+
+# VRF Rounds, Indexes, Slots, Cells Computation
+# =============================================
+
+@Subroutine(TealType.uint64)
+def get_vrf_round_from_round(rnd: Expr) -> Expr:
+    """
+    Return the VRF round used for the given round rnd
+    That is the lowest multiple of VRF_ROUND_MULTIPLE
+    that is greater or equal to round
+    """
+    return ((rnd + Int(VRF_ROUND_MULTIPLE - 1)) / Int(VRF_ROUND_MULTIPLE)) * Int(VRF_ROUND_MULTIPLE)
+
+
+def get_index_from_round(rnd: Expr) -> Expr:
+    """
+    Return the index in which the VRF output associated to round rnd is stored
+    See ../DESIGN.md for definition of indexes, slots, and cells
+    """
+    return (get_vrf_round_from_round(rnd) / Int(VRF_ROUND_MULTIPLE)) % Int(NB_STORED_VRF_OUTPUTS)
 
 
 @Subroutine(TealType.uint64)
-def ceiling8(num: Expr):
-    return ((num + Int(SUBMIT_VAL_GAP - 1)) / Int(SUBMIT_VAL_GAP)) * Int(SUBMIT_VAL_GAP)
+def get_slot_from_round(rnd: Expr) -> Expr:
+    """
+    Return the slot number in which the VRF output associated to round rnd is stored
+    See ../DESIGN.md for definition of indexes, slots, and cells
+    """
+    return get_index_from_round(rnd) / Int(NB_VRF_CELLS_PER_SLOT)
 
 
-# return the slot number for the given round
-@Subroutine(TealType.bytes)
-def get_slot_from_round(round: Expr):
-    return Itob(((ceiling8(round) / Int(SUBMIT_VAL_GAP)) % Int(NB_OF_STORED_VRF_OUTPUTS)) / Int(NB_OF_CELLS_PER_SLOT))
-
-
-# return the inner cell for the given round
 @Subroutine(TealType.uint64)
-def get_vrf_output_cell_from_round(round: Expr):
-    return ((ceiling8(round) / Int(SUBMIT_VAL_GAP)) % Int(NB_OF_STORED_VRF_OUTPUTS)) % Int(NB_OF_CELLS_PER_SLOT)
+def get_cell_from_round(rnd: Expr) -> Expr:
+    """
+    Return the cell number (within the slot_ in which the VRF output associated to round rnd is stored
+    See ../DESIGN.md for definition of indexes, slots, and cells
+    """
+    return get_index_from_round(rnd) % Int(NB_VRF_CELLS_PER_SLOT)
 
 
-# a VRF output can be located in one of 189 cells (63 slots with 3 cells each)
-# cells are updated in a cyclic manner
-# this Subroutine updates the designated cell inside a given slot
+# ============================
+#
+# Application State Read/Write
+#
+# ============================
+
+# Note: most of these functions are not subroutines
+#       as they are too simple and making them subroutine would be inefficient
+
+# Main slot
+# Key = Byte("")
+# Value = last_round | first_round | vrf_pk
+
+def get_last_round_stored() -> Expr:
+    """
+    Return the last round stored in the application state (main slot)
+    """
+    return ExtractUint64(App.globalGet(Bytes('')), Int(0))
+
+
+def put_last_round_stored(last_round: Expr) -> Expr:
+    """
+    Update the last round in the application state (main slot)
+    """
+    return App.globalPut(
+        Bytes(''),
+        Concat(
+            Itob(last_round),
+            Itob(get_first_round_stored()),
+            get_vrf_pk()
+        )
+    )
+
+
+def get_first_round_stored() -> Expr:
+    """
+    Return the first round stored in the application state (main slot)
+    """
+    return ExtractUint64(App.globalGet(Bytes('')), Int(8))
+
+
+def put_first_round_stored(first_round: Expr) -> Expr:
+    """
+    Update the first round in the application state (main slot)
+    """
+    return App.globalPut(
+        Bytes(''),
+        Concat(
+            Itob(get_last_round_stored()),
+            Itob(first_round),
+            get_vrf_pk()
+        )
+    )
+
+
+def get_vrf_pk() -> Expr:
+    """
+    Return the VRF pk stored in the application state (main slot)
+    """
+    return Extract(App.globalGet(Bytes('')), Int(16), Int(VRF_PK_LEN))
+
+
+def get_vrf_output(rnd: Expr) -> Expr:
+    """
+    Return the stored VRF output for the round rnd
+    If rnd is not a multiple of VRF_ROUND_MULTIPLE, then round up to such a multiple
+    """
+    return Extract(
+        App.globalGet(Itob(get_slot_from_round(rnd))),
+        Int(STORED_VRF_OUTPUT_LEN) * get_cell_from_round(rnd),
+        Int(STORED_VRF_OUTPUT_LEN)
+    )
+
+
+@Subroutine(TealType.none)
+def put_vrf_output(rnd: Expr, truncated_vrf_output: Expr):
+    """
+    Store/Update the VRF output in its designated cell
+    Does not change the other VRF output
+    """
+    slot = ScratchVar(TealType.bytes)
+    print(slot.__class__)
+    return Seq([
+        slot.store(Itob(get_slot_from_round(rnd))),
+        App.globalPut(
+            slot.load(),
+            update_slot_with_new_vrf_output(
+                App.globalGet(slot.load()),
+                truncated_vrf_output,
+                get_cell_from_round(rnd)
+            )
+        )
+    ])
+
+
 @Subroutine(TealType.bytes)
 def update_slot_with_new_vrf_output(slot: Expr, vrf_output: Expr, vrf_output_cell_idx: Expr):
-    first = Concat(vrf_output, Extract(slot, Int(HASH_LENGTH), Int(2 * HASH_LENGTH)))
-    second = Concat(Extract(slot, Int(0), Int(HASH_LENGTH)), vrf_output,
-                    Extract(slot, Int(2 * HASH_LENGTH), Int(HASH_LENGTH)))
-    third = Concat(Extract(slot, Int(0), Int(2 * HASH_LENGTH)), vrf_output)
+    """
+    Return the slow value where the vrf_output_cell_idx has been replaced by vrf_output
+    and the other cells are kept the same
+    Auxiliary function for put_vrf_output
+    """
+    first = Concat(
+        vrf_output,
+        Extract(slot, Int(STORED_VRF_OUTPUT_LEN), Int(2 * STORED_VRF_OUTPUT_LEN))
+    )
+    second = Concat(
+        Extract(slot, Int(0), Int(STORED_VRF_OUTPUT_LEN)),
+        vrf_output,
+        Extract(slot, Int(2 * STORED_VRF_OUTPUT_LEN), Int(STORED_VRF_OUTPUT_LEN))
+    )
+    third = Concat(
+        Extract(slot, Int(0), Int(2 * STORED_VRF_OUTPUT_LEN)),
+        vrf_output
+    )
     return Cond(
         [vrf_output_cell_idx == Int(0), first],
         [vrf_output_cell_idx == Int(1), second],
@@ -45,150 +197,145 @@ def update_slot_with_new_vrf_output(slot: Expr, vrf_output: Expr, vrf_output_cel
     )
 
 
-# update the last updated round
-def update_last_round(last_round: Expr):
-    return App.globalPut(
-        Bytes(''),
-        Concat(
-            Itob(last_round),
-            Itob(get_first_stored_vrf_round()),
-            get_vrf_pk()
-        )
-    )
+# ============================================================================
+#
+# Cryptography-related routines: VRF verification and random output generation
+#
+# ============================================================================
 
 
-# update the first updated round
-def update_first_round(first_round: Expr):
-    return App.globalPut(
-        Bytes(''),
-        Concat(
-            Itob(get_last_stored_vrf_round()),
-            Itob(first_round),
-            get_vrf_pk()
-        )
-    )
-
-
-# verify the VRF proof and return the VRF output
 @Subroutine(TealType.bytes)
-def verify_vrf(round: Expr, vrf_proof: Expr, vrf_pk: Expr):
-    block_seed = Block.seed(round)  # as a security measure, this will fail if seed is unavailable
-    vrf_verify = VrfVerify.algorand(Sha512_256(Concat(Itob(round), block_seed)), vrf_proof, vrf_pk)
+def verify_vrf(rnd: Expr, vrf_proof: Expr, vrf_pk: Expr):
+    """
+    Verify the VRF proof and returns the truncated VRF output if valid.
+    (Truncation is done so the output length is STORED_VRF_OUTPUT_LEN.)
+    Panic if the vrf_proof is invalid
+    """
+    block_seed = Block.seed(rnd)  # this panics if seed is unavailable, which is what we want
+    vrf_verify = VrfVerify.algorand(Sha512_256(Concat(Itob(rnd), block_seed)), vrf_proof, vrf_pk)
     return Seq([
         vrf_verify,
         Assert(vrf_verify.output_slots[1].load() == Int(1)),
-        vrf_verify.output_slots[0].load()
-    ])
-
-
-# store the VRF output in its designated cell
-@Subroutine(TealType.none)
-def store_vrf(round: Expr, vrf_output: Expr):
-    slot = ScratchVar(TealType.bytes)
-    return Seq([
-        slot.store(get_slot_from_round(round)),
-        App.globalPut(
-            slot.load(),
-            update_slot_with_new_vrf_output(
-                App.globalGet(slot.load()),
-                Sha512_256(vrf_output),
-                get_vrf_output_cell_from_round(round)
-            )
-        )
+        Log(vrf_verify.output_slots[0].load()),
+        Extract(vrf_verify.output_slots[0].load(), Int(0), Int(STORED_VRF_OUTPUT_LEN))
     ])
 
 
 @Subroutine(TealType.none)
-def verify_and_store_vrf(round: Expr, vrf_proof: Expr, vrf_pk: Expr):
-    return store_vrf(
-        round,
+def verify_and_store_vrf(rnd: Expr, vrf_proof: Expr, vrf_pk: Expr):
+    """
+    Verify the VRF proof and store the VRF output in the right place
+    Assumes that round rnd is already a multiple of VRF_ROUND_MULTIPLE
+    """
+    return put_vrf_output(
+        rnd,
         verify_vrf(
-            round,
+            rnd,
             vrf_proof,
             vrf_pk
         )
     )
 
 
-# init global state with a constant value
-@Subroutine(TealType.none)
-def init_global_state(start: Expr, length: Expr, round: Expr, vrf_pk: Expr):
-    i = ScratchVar(TealType.uint64)
-    init = i.store(start)
-    cond = i.load() < length
-    itr = i.store(i.load() + Int(1))
-    return Seq([
-        For(init, cond, itr).Do(
-            App.globalPut(
-                Itob(i.load()),
-                Bytes(NB_OF_CELLS_PER_SLOT * HASH_LENGTH * 'a')
-                # we need an arbitrary value of length 120 to allow for 3 VRF outputs per slot
-            )
-        ),
-        # store the initial round and the VRF public key in their own slot (metadata slot)
-        App.globalPut(Bytes(''), Concat(Itob(round), Itob(round), vrf_pk))
-    ])
-
-
-def get_last_stored_vrf_round():
-    return ExtractUint64(App.globalGet(Bytes('')), Int(0))
-
-
-def get_first_stored_vrf_round():
-    return ExtractUint64(App.globalGet(Bytes('')), Int(8))
-
-
-def get_vrf_pk():
-    return Extract(App.globalGet(Bytes('')), Int(16), Int(HASH_LENGTH))
-
-
-@Subroutine(TealType.uint64)
-def is_round_in_valid_range(round: Expr):
-    return And(
-        get_last_stored_vrf_round() >= round,
-        round >= get_first_stored_vrf_round()
-    )
-
-
 @Subroutine(TealType.bytes)
-def get_randomness(round: Expr, user_data: Expr):
-    return Sha512_256(
+def get_random_output(rnd: Expr, user_data: Expr):
+    """
+    Get the random output associated with round rnd and user_data
+    It assumes that round is valid (checked using is_round_in_valid_range)
+    """
+    return Sha3_256(
         Concat(
-            Extract(
-                App.globalGet(get_slot_from_round(round)),
-                Int(HASH_LENGTH) * get_vrf_output_cell_from_round(round),
-                Int(HASH_LENGTH)
-            ),
-            Itob(round),
+            get_vrf_output(rnd),
+            Itob(rnd),
             user_data
         )
     )
 
 
+# ==================================
+#
+# Misc Subroutines (init and checks)
+#
+# ==================================
+
+
+# init global state with a constant value
+@Subroutine(TealType.none)
+def init_global_state(rnd: Expr, vrf_pk: Expr):
+    """
+    Initialize the global state
+    """
+    i = ScratchVar(TealType.uint64)
+    init = i.store(Int(0))
+    cond = i.load() < Int(NB_VRF_SLOTS)
+    itr = i.store(i.load() + Int(1))
+    return Seq([
+        # store an arbitrary value in each of the VRF slots
+        For(init, cond, itr).Do(
+            App.globalPut(
+                Itob(i.load()),
+                Bytes(NB_VRF_CELLS_PER_SLOT * STORED_VRF_OUTPUT_LEN * 'a')
+                # we need an arbitrary value of the right length to allow for 3 VRF outputs per slot
+            )
+        ),
+        # store the initial round and the VRF public key in the main slot
+        App.globalPut(Bytes(''), Concat(Itob(rnd), Itob(rnd), vrf_pk))
+    ])
+
+
 @Subroutine(TealType.uint64)
-def is_recovering(round: Expr):
-    return If(
-        Global.round() + Int(NB_GRACE_BLOCKS) >= Int(NB_RETAINED_BLOCKS)
-    ).Then(
-        And(
-            Global.round() - get_last_stored_vrf_round() > Int(NB_RETAINED_BLOCKS + SUBMIT_VAL_GAP),
-            round % Int(SUBMIT_VAL_GAP) == Int(0),
-            round <= ceiling8(Global.round() + Int(NB_GRACE_BLOCKS) - Int(NB_RETAINED_BLOCKS))
-        )
-    ).Else(
-        Int(0)
+def is_round_in_valid_range(rnd: Expr):
+    """
+    Return whether a round rnd is in the valid range to get associated random output.
+    I.e., its associated VRF round is between the first and last round stored.
+    """
+    vrf_round = get_vrf_round_from_round(rnd)
+    return And(
+        vrf_round <= get_last_round_stored(),
+        vrf_round >= get_first_round_stored()
     )
 
 
-def can_submit(round: abi.Uint64):
+@Subroutine(TealType.uint64)
+def is_valid_recovering_round(rnd: Expr):
+    """
+    Return whether the round rnd provided is allowed to be submitted by the VRF service
+    AND corresponds to a recovering round
+    """
+    return And(
+        # rounds must be multiple of VRF_ROUND_MULTIPLE
+        rnd % Int(VRF_ROUND_MULTIPLE) == Int(0),
+        # there is a gap between provided => we are in recovery
+        rnd > get_last_round_stored() + Int(VRF_ROUND_MULTIPLE),
+        # the round provided is as early as possible bare the grace period
+        (rnd + Int(NB_RETAINED_BLOCKS)) <= (Global.round() + Int(NB_GRACE_BLOCKS))
+    )
+
+
+def can_submit(rnd: Expr):
+    """
+    Return whether the VRF service can submit a VRF proof for the round rnd.
+
+    Submitting proofs is allowed only for subsequent rounds
+    OR when we're recovering
+    """
     return Or(
-        # Submitting proofs is allowed only for subsequent rounds or in case the smart contract is stalled
-        get_last_stored_vrf_round() + Int(SUBMIT_VAL_GAP) == round.get(),
-        is_recovering(round.get())
+        get_last_round_stored() + Int(VRF_ROUND_MULTIPLE) == rnd,
+        is_valid_recovering_round(rnd)
     )
+
+
+# ==============================
+#
+# ABI-Compliant Main Application
+#
+# ==============================
 
 
 def vrf_beacon_abi():
+    """
+    ABI-Compliant Main Application
+    """
     router = Router(
         name='Randomness beacon',
         bare_calls=BareCallActions(
@@ -197,67 +344,89 @@ def vrf_beacon_abi():
     )
 
     @router.method(no_op=CallConfig.CREATE)
-    def create_app(round: abi.Uint64, vrf_proof: abi.StaticArray[abi.Byte, Literal[80]], vrf_pk: abi.Address):
+    def create_app(
+            round: abi.Uint64,  # pylint: disable=W0622
+            vrf_proof: abi.StaticBytes[Literal[VRF_PROOF_LEN]],
+            vrf_pk: abi.StaticBytes[Literal[VRF_PK_LEN]]
+    ):
         return Seq([
-            Assert(round.get() % Int(SUBMIT_VAL_GAP) == Int(0)),
-            Assert(Len(vrf_pk.get()) == Int(HASH_LENGTH)),
-            #  init global state to be bytes
-            init_global_state(Int(0), Int(NB_OF_SLOTS), round.get(), vrf_pk.get()),
+            # it is very important we check we are a multiple of VRF_ROUND_MULTIPLE here
+            # otherwise we may be forever shifted
+            Assert(round.get() % Int(VRF_ROUND_MULTIPLE) == Int(0)),
+            Assert(Len(vrf_pk.get()) == Int(VRF_PK_LEN)),
+            # init global state
+            init_global_state(round.get(), vrf_pk.get()),
             # verify the VRF proof and store its output in the correct slot
-            verify_and_store_vrf(round.get(), vrf_proof.encode(), vrf_pk.get()),
+            verify_and_store_vrf(round.get(), vrf_proof.get(), vrf_pk.get()),
         ])
 
     @router.method(no_op=CallConfig.CALL)
-    def submit(round: abi.Uint64, vrf_proof: abi.StaticArray[abi.Byte, Literal[80]]):
+    def submit(
+            round: abi.Uint64,  # pylint: disable=W0622
+            vrf_proof: abi.StaticBytes[Literal[VRF_PROOF_LEN]]
+    ):
         return Seq([
-            Assert(can_submit(round)),
-            # verify the VRF proof and store its output in the correct slot
-            verify_and_store_vrf(round.get(), vrf_proof.encode(), get_vrf_pk()),
+            # verify this block can be submitted
+            Assert(can_submit(round.get())),
+            # verify the VRF proof and store its output in the correct slot/cell
+            verify_and_store_vrf(round.get(), vrf_proof.get(), get_vrf_pk()),
             # update the last submitted round
-            update_last_round(round.get()),
-            # update the first submitted round only if recovering or
+            put_last_round_stored(round.get()),
+            # update the first submitted round
             If(
-                is_recovering(round.get())
+                is_valid_recovering_round(round.get())
             ).Then(
-                update_first_round(round.get())
+                # if recovering, now the current round is the first round
+                put_first_round_stored(round.get())
             ).ElseIf(
-                get_last_stored_vrf_round() - get_first_stored_vrf_round() >= Int(
-                    NB_OF_STORED_VRF_OUTPUTS * SUBMIT_VAL_GAP)
+                get_last_round_stored() - get_first_round_stored() >= Int(NB_STORED_VRF_OUTPUTS * VRF_ROUND_MULTIPLE)
             ).Then(
-                update_first_round(get_last_stored_vrf_round() - Int((NB_OF_STORED_VRF_OUTPUTS - 1) * SUBMIT_VAL_GAP))
+                # update the first round to the earliest first round stored
+                # which must be larger than last_round - NB_STORED_VRF_OUTPUT * VRF_ROUND_MULTIPLE
+                # (the round last_round - NB_STORED_VRF_OUTPUT * VRF_ROUND_MULTIPLE was indeed
+                #  overwritten by the last VRF output)
+                put_first_round_stored(
+                    get_last_round_stored() - Int((NB_STORED_VRF_OUTPUTS - 1) * VRF_ROUND_MULTIPLE)
+                )
             )
         ])
 
     @router.method(no_op=CallConfig.CALL)
-    def get(round: abi.Uint64, user_data: abi.DynamicArray[abi.Byte], *,
-            output: abi.StaticArray[abi.Byte, Literal[32]]):
-        # TODO should we enforce user_data to be of certain minimum length?
+    def get(
+            round: abi.Uint64,  # pylint: disable=W0622
+            user_data: abi.DynamicBytes,
+            *,
+            output: abi.DynamicBytes
+    ):
         return If(
             Not(is_round_in_valid_range(round.get()))
         ).Then(
             # according to arc-0021, if the requested value can't be found 'get' returns an empty byte slice
-            output.decode(
+            output.set(
                 Bytes('')
             )
         ).Else(
             # if the requested round is in the valid window we return the hash of the concatenation of
             # the VRF output of the requested round with the user input
-            output.decode(
-                get_randomness(round.get(), user_data.encode())
+            output.set(
+                get_random_output(round.get(), user_data.get())
             )
         )
 
     @router.method(no_op=CallConfig.CALL)
-    def mustGet(round: abi.Uint64, user_data: abi.DynamicArray[abi.Byte], *,
-                output: abi.StaticArray[abi.Byte, Literal[32]]):
-        # TODO should we enforce user_data to be of certain minimum length?
+    def must_get(
+            round: abi.Uint64,  # pylint: disable=W0622
+            user_data: abi.DynamicBytes,
+            *,
+            output: abi.DynamicBytes
+    ):
         return Seq([
-            # according to arc-0021, if the requested value can't be found 'mustGet' panics
+            # according to arc-0021, if the requested value can't be found 'must_get' panics
             Assert(is_round_in_valid_range(round.get())),
             # if the requested round is in the valid window we return the hash of the concatenation of
             # the VRF output of the requested round with the user input
-            output.decode(
-                get_randomness(round.get(), user_data.encode())
+            output.set(
+                get_random_output(round.get(), user_data.get())
             )
         ])
 
@@ -266,15 +435,18 @@ def vrf_beacon_abi():
 
 if __name__ == '__main__':
     compiled, clear, contract = vrf_beacon_abi().compile_program(version=7)
-    filename = 'vrf_beacon_abi_approval.teal'
-    with open(filename, 'w') as f:
+
+    file_name = 'vrf_beacon_abi_approval.teal'  # pylint: disable = C0103
+    with open(file_name, 'w', encoding='utf8') as f:
         f.write(compiled)
-        print(f'compiled {filename}')
-    filename = 'vrf_beacon_abi_clear.teal'
-    with open(filename, 'w') as f:
+        print(f'compiled {file_name}')
+
+    file_name = 'vrf_beacon_abi_clear.teal'  # pylint: disable = C0103
+    with open(file_name, 'w', encoding='utf8') as f:
         f.write(clear)
-        print(f'compiled {filename}')
-    filename = 'contract.json'
-    with open(filename, 'w') as f:
+        print(f'compiled {file_name}')
+
+    file_name = 'contract.json'  # pylint: disable = C0103
+    with open(file_name, 'w', encoding='utf8') as f:
         print(json.dumps(contract.dictify(), indent=4), file=f)
-        print(f'compiled {filename}')
+        print(f'compiled {file_name}')
