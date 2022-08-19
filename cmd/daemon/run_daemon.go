@@ -9,26 +9,26 @@ import (
 	"encoding/base64"
 	"encoding/binary"
 	"fmt"
-	"github.com/algorand/go-algorand-sdk/abi"
-	"github.com/algorand/go-algorand-sdk/client/v2/algod"
-	"github.com/algorand/go-algorand-sdk/client/v2/common/models"
-	"github.com/algorand/go-algorand-sdk/crypto"
-	"github.com/algorand/go-algorand-sdk/future"
-	"github.com/algorand/go-algorand-sdk/types"
-	"github.com/ori-shem-tov/vrf-oracle/libsodium-wrapper"
-	models2 "github.com/ori-shem-tov/vrf-oracle/models"
-	"github.com/ori-shem-tov/vrf-oracle/tools"
-	"golang.org/x/crypto/sha3"
 	"io/ioutil"
 	"os"
 	"strings"
 	"time"
 
-	log "github.com/sirupsen/logrus"
-	"github.com/spf13/pflag"
-
+	"github.com/algorand/go-algorand-sdk/abi"
+	"github.com/algorand/go-algorand-sdk/client/v2/algod"
+	"github.com/algorand/go-algorand-sdk/client/v2/common/models"
+	"github.com/algorand/go-algorand-sdk/crypto"
+	"github.com/algorand/go-algorand-sdk/future"
 	"github.com/algorand/go-algorand-sdk/mnemonic"
+	"github.com/algorand/go-algorand-sdk/types"
+	log "github.com/sirupsen/logrus"
 	"github.com/spf13/cobra"
+	"github.com/spf13/pflag"
+	"golang.org/x/crypto/sha3"
+
+	"github.com/ori-shem-tov/vrf-oracle/libsodium-wrapper"
+	models2 "github.com/ori-shem-tov/vrf-oracle/models"
+	"github.com/ori-shem-tov/vrf-oracle/tools"
 )
 
 var (
@@ -164,7 +164,7 @@ func runSomeTests(round, appID uint64, serviceAccount crypto.Account, vrfOutput 
 	binary.BigEndian.PutUint64(roundBytes, round)
 	storedVRFOutput := vrfOutput[:32] // we truncate the VRF output to 32 bytes
 
-	log.Infof("stored VRF output should be: %v", base64.StdEncoding.EncodeToString(storedVRFOutput))
+	log.Debugf("stored VRF output should be: %v", base64.StdEncoding.EncodeToString(storedVRFOutput))
 
 	hashedOutput := sha3.Sum256(append(storedVRFOutput[:], append(roundBytes, userSeed...)...))
 	// ABI adds 0x0020 at the beginning, as it's the length of the output
@@ -244,6 +244,9 @@ func buildAnswerPhaseTransactionsGroupABI(appID, dummyAppID uint64, serviceAccou
 		}
 	}
 	stxsSlice, err := atc.GatherSignatures()
+	if err != nil {
+		return nil, fmt.Errorf("error in atc.GatherSignatures: %w", err)
+	}
 	var stxBytes []byte
 	for _, stx := range stxsSlice {
 		stxBytes = append(stxBytes, stx...)
@@ -587,6 +590,9 @@ func createABIApp(startingRound, dummyAppID uint64, algodClient *algod.Client, v
 		}
 	}
 	stxsSlice, err := atc.GatherSignatures()
+	if err != nil {
+		return 0, fmt.Errorf("error in atc.GatherSignatures: %w", err)
+	}
 	var stxBytes []byte
 	for _, stx := range stxsSlice {
 		stxBytes = append(stxBytes, stx...)
@@ -605,10 +611,12 @@ func createABIApp(startingRound, dummyAppID uint64, algodClient *algod.Client, v
 }
 
 func compileTeal(approvalProgramFilename, clearProgramFilename string, algodClient *algod.Client) ([]byte, []byte, error) {
+	// #nosec G304
 	approval, err := ioutil.ReadFile(approvalProgramFilename)
 	if err != nil {
 		return nil, nil, err
 	}
+	// #nosec G304
 	clear, err := ioutil.ReadFile(clearProgramFilename)
 	if err != nil {
 		return nil, nil, err
@@ -753,6 +761,10 @@ var RunDaemonCmd = &cobra.Command{
 			return
 		}
 		serviceAddress, err := crypto.GenerateAddressFromSK(servicePrivateKey)
+		if err != nil {
+			log.Errorf("error in crypto.GenerateAddressFromSK: %v", err)
+			return
+		}
 		serviceAccount := crypto.Account{
 			PrivateKey: servicePrivateKey,
 			Address:    serviceAddress,
@@ -794,6 +806,10 @@ var RunDaemonCmd = &cobra.Command{
 		}
 		log.Infof("app id: %d\n", appID)
 		res, err := algodClient.GetApplicationByID(appID).Do(context.Background())
+		if err != nil {
+			log.Error(err)
+			return
+		}
 		for _, kv := range res.Params.GlobalState {
 			if kv.Key == "" {
 				log.Infof("metdata is %s", kv.Value.Bytes)

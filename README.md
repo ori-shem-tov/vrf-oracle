@@ -18,6 +18,28 @@ Design is detailed in [./DESIGN.md](DESIGN.md).
 
 The code uses the same VRF implementation used by the `crypto` package in `go-algorand`.
 
+## Requirements
+
+### Requirements for smart contract
+
+Python 3.10
+
+### Requirements for VRF service
+
+Go 1.14 or newer, as well as usual tools to allow compilation (C compiler, autoconf, make, ...)
+
+### Requirements for developing
+
+- `pylint`: `python3 -m pip install pylint`
+- `golangci-lint`
+    - on Ubuntu: https://golangci-lint.run/usage/install/#local-installation
+      (note that you must have a single folder in your `$GOPATH` if you run the proposed command)
+    - on macOS: `brew install golangci-lint`
+- `gosec`
+    - on Ubuntu: https://github.com/securego/gosec#local-installation
+    - on macOS: `brew install gosec`
+
+
 ## Build
 
 ### Build libsodium from fork
