@@ -18,6 +18,7 @@ import (
 	"github.com/ori-shem-tov/vrf-oracle/libsodium-wrapper"
 	models2 "github.com/ori-shem-tov/vrf-oracle/models"
 	"github.com/ori-shem-tov/vrf-oracle/tools"
+	"golang.org/x/crypto/sha3"
 	"io/ioutil"
 	"os"
 	"strings"
@@ -102,7 +103,7 @@ func computeWaitFactor(roundFromIndexer uint64, roundToFetch uint64) float64 {
 func addGetMethodCall(atc *future.AtomicTransactionComposer, round, appID uint64, serviceAccount crypto.Account,
 	sp types.SuggestedParams, userSeed []byte) error {
 	signer := future.BasicAccountTransactionSigner{Account: serviceAccount}
-	methodSig := "get(uint64,byte[])byte[32]"
+	methodSig := "get(uint64,byte[])byte[]"
 	method, err := abi.MethodFromSignature(methodSig)
 	if err != nil {
 		return fmt.Errorf("error abi.MethodFromSignature(methodSig) %v", err)
@@ -157,22 +158,25 @@ func runSomeTests(round, appID uint64, serviceAccount crypto.Account, vrfOutput 
 		log.Errorf("didn't get MethodResults for round %d", round)
 		return
 	}
+
+	// Verify the random output matches what it should be
 	roundBytes := make([]byte, 8)
 	binary.BigEndian.PutUint64(roundBytes, round)
-	toHash := vrfOutput
-	hashedOutput := sha512.Sum512_256(toHash)
-	var encodedUserSeedLength [2]byte
-	binary.BigEndian.PutUint16(encodedUserSeedLength[:], uint16(len(userSeed)))
-	encodedUserSeed := append(encodedUserSeedLength[:], userSeed...)
-	hashedOutput = sha512.Sum512_256(append(hashedOutput[:], append(roundBytes, encodedUserSeed...)...))
-	hashedOutputB64 := base64.StdEncoding.EncodeToString(hashedOutput[:])
-	log.Debugf("hashed output (b64) for round %d is %v", round, hashedOutputB64)
+	storedVRFOutput := vrfOutput[:32] // we truncate the VRF output to 32 bytes
+
+	log.Infof("stored VRF output should be: %v", base64.StdEncoding.EncodeToString(storedVRFOutput))
+
+	hashedOutput := sha3.Sum256(append(storedVRFOutput[:], append(roundBytes, userSeed...)...))
+	// ABI adds 0x0020 at the beginning, as it's the length of the output
+	abiHashedOutputB64 := base64.StdEncoding.EncodeToString(append([]byte{0x00, 0x20}, hashedOutput[:]...))
+	log.Debugf("hashed output (b64) for round %d is %v", round, abiHashedOutputB64)
+
 	b64Returned := base64.StdEncoding.EncodeToString(result.MethodResults[0].RawReturnValue)
-	if hashedOutputB64 != b64Returned {
-		log.Errorf("outputs don't match for round %d TXID %s %s != %s", round, result.TxIDs[0], b64Returned, hashedOutputB64)
+	if abiHashedOutputB64 != b64Returned {
+		log.Errorf("outputs don't match for round %d TXID %s %s != %s", round, result.TxIDs[0], b64Returned, abiHashedOutputB64)
 		return
 	}
-	log.Debugf("passed tests: hashed output (b64) for round %d is %v", round, hashedOutputB64)
+	log.Debugf("passed tests: ABI hashed output (b64) for round %d is %v", round, abiHashedOutputB64)
 }
 
 // generates a group of 3 application calls:
@@ -523,7 +527,7 @@ func createABIApp(startingRound, dummyAppID uint64, algodClient *algod.Client, v
 		return 0, fmt.Errorf("error crypto.AccountFromPrivateKey(appCreatorPrivateKey) %v", err)
 	}
 	signer := future.BasicAccountTransactionSigner{Account: appCreatorAccount}
-	methodSig := "create_app(uint64,byte[80],address)void"
+	methodSig := "create_app(uint64,byte[80],byte[32])void"
 	method, err := abi.MethodFromSignature(methodSig)
 	if err != nil {
 		return 0, fmt.Errorf("error abi.MethodFromSignature(methodSig) %v", err)
