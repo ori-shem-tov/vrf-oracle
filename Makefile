@@ -2,10 +2,13 @@ SRCPATH     := $(shell pwd)
 ARCH        := $(shell ./scripts/archtype.sh)
 OS_TYPE     := $(shell ./scripts/ostype.sh)
 
-.PHONY: build-libsodium
+.PHONY: build-libsodium lint
 
 # build our fork of libsodium, placing artifacts into lib/ and include/
 build-libsodium: libs/$(OS_TYPE)/$(ARCH)/lib/libsodium.a
+
+lint:
+	pylint --rcfile pyteal/.pylintrc pyteal/*.py
 
 libs/$(OS_TYPE)/$(ARCH)/lib/libsodium.a:
 	mkdir -p copies/$(OS_TYPE)/$(ARCH)
