@@ -18,7 +18,7 @@ A new VRF proof is computed once every 8 rounds and then submitted to the smart 
 Specs:  
 - The input to the VRF computation is `SHA-512/256(round|block_seed)` where:
   - `round` is the round of the computation (8 bytes, big endian). Must be a multiple of 8.
-  - `block_seed` is the seed taken from block number == `round` (8 bytes, big endian).
+  - `block_seed` is the seed taken from block number == `round`.
   - `|` is the concatenation operator.
 - The VRF secret key used by the service must be kept secure and available (see below).
 
