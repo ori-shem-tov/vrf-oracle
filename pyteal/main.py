@@ -167,7 +167,6 @@ def put_stored_vrf_output(rnd: Expr, truncated_vrf_output: Expr):
     Does not change the other stored VRF outputs.
     """
     slot = ScratchVar(TealType.bytes)
-    print(slot.__class__)
     return Seq([
         Assert(Len(truncated_vrf_output) == Int(STORED_VRF_OUTPUT_LEN)),
         slot.store(Itob(get_slot_from_round(rnd))),
@@ -457,6 +456,9 @@ def vrf_beacon_abi():
 
 
 if __name__ == '__main__':
+    # this will immediately fail if the current PyTeal version does not satisfy the
+    # version constraint
+    pragma(compiler_version="0.17.0")
     compiled, clear, contract = vrf_beacon_abi().compile_program(version=7)
 
     file_name = 'vrf_beacon_abi_approval.teal'  # pylint: disable = C0103
