@@ -1,7 +1,6 @@
 package daemon
 
 import (
-	"container/heap"
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
@@ -27,9 +26,14 @@ import (
 	"golang.org/x/crypto/sha3"
 
 	"github.com/ori-shem-tov/vrf-oracle/libsodium-wrapper"
-	models2 "github.com/ori-shem-tov/vrf-oracle/models"
 	"github.com/ori-shem-tov/vrf-oracle/tools"
 )
+
+type Result struct {
+	Round    uint64
+	UserData []byte
+	Method   string
+}
 
 var (
 	appCreatorMnemonic      string
@@ -41,11 +45,33 @@ var (
 	AlgodAddress            = os.Getenv("AF_ALGOD_ADDRESS")
 	AlgodToken              = os.Getenv("AF_ALGOD_TOKEN")
 	logLevelEnv             = strings.ToLower(os.Getenv("VRF_LOG_LEVEL"))
+	vrfOutputsHistory       [][]byte
+	resultsHistory          map[string]Result
 )
 
 const (
-	waitBetweenBlocksMS = 100
-	numOfDummyTxns      = 10
+	WaitBetweenBlocksMS = 1
+	NumOfDummyTxns      = 9
+	// See ./DESIGN.md for definition of indexes, slots, and cells
+	NbVrfSlots         = 63 // number of slots used to store VRF outputs
+	NbVrfCellsPerSlot  = 3
+	NbStoredVrfOutputs = NbVrfSlots * NbVrfCellsPerSlot // this is also the number of indexes
+
+	VrfRoundMultiple = 8 // we only store VRF outputs for rounds that are multiple of this number
+
+	// Lengths of the various VRF associated values
+	VrfPkLen           = 32
+	VrfProofLen        = 80
+	StoredVrfOutputLen = 32 // length of the stored VRF output (that are truncated)
+
+	// This part is for the recovery parameters
+	// In case no VRF proof was submitted for too long, there will be a gap
+	// in the rounds for which random outputs can be provided
+	// To get this gap as small as possible, the VRF proof submitter
+	// is required to submit a VRF proof as old as possible, minus the grace period
+	// which means submitted round <= current round - NbRetainedBlocks + NbGraceBlocks
+	NbRetainedBlocks = 1000
+	NbGraceBlocks    = 2 * VrfRoundMultiple
 )
 
 func MarkFlagRequired(flag *pflag.FlagSet, name string) {
@@ -91,19 +117,10 @@ func init() {
 
 }
 
-func computeWaitFactor(roundFromIndexer uint64, roundToFetch uint64) float64 {
-	// keep pace with the indexer
-	// if the service is far behind the indexer, wait time will decrease
-	if roundFromIndexer <= roundToFetch {
-		return 1
-	}
-	return 1 / float64(roundFromIndexer-roundToFetch)
-}
-
-func addGetMethodCall(atc *future.AtomicTransactionComposer, round, appID uint64, serviceAccount crypto.Account,
-	sp types.SuggestedParams, userSeed []byte) error {
+func addGetOrMustGetMethodCall(atc *future.AtomicTransactionComposer, round, appID uint64, serviceAccount crypto.Account,
+	sp types.SuggestedParams, userData []byte, methodName string) error {
 	signer := future.BasicAccountTransactionSigner{Account: serviceAccount}
-	methodSig := "get(uint64,byte[])byte[]"
+	methodSig := fmt.Sprintf("%s(uint64,byte[])byte[]", methodName)
 	method, err := abi.MethodFromSignature(methodSig)
 	if err != nil {
 		return fmt.Errorf("error abi.MethodFromSignature(methodSig) %v", err)
@@ -111,18 +128,11 @@ func addGetMethodCall(atc *future.AtomicTransactionComposer, round, appID uint64
 	methodCallParams := future.AddMethodCallParams{
 		AppID:           appID,
 		Method:          method,
-		MethodArgs:      []interface{}{round, userSeed},
+		MethodArgs:      []interface{}{round, userData},
 		Sender:          serviceAccount.Address,
 		SuggestedParams: sp,
-		OnComplete:      0,
-		ExtraPages:      0,
 		Note:            nil,
-		Lease:           [32]byte{},
-		RekeyTo:         types.Address{},
 		Signer:          signer,
-		ForeignApps:     nil,
-		ForeignAssets:   nil,
-		ForeignAccounts: nil,
 	}
 	err = atc.AddMethodCall(methodCallParams)
 	if err != nil {
@@ -131,7 +141,7 @@ func addGetMethodCall(atc *future.AtomicTransactionComposer, round, appID uint64
 	return nil
 }
 
-func getRandomUserSeed() []byte {
+func getRandomUserData() []byte {
 	res := make([]byte, 10)
 	_, err := rand.Read(res)
 	if err != nil {
@@ -140,49 +150,276 @@ func getRandomUserSeed() []byte {
 	return res
 }
 
-func runSomeTests(round, appID uint64, serviceAccount crypto.Account, vrfOutput []byte, sp types.SuggestedParams,
-	algodClient *algod.Client) {
+func getVrfOutputForRound(round uint64) []byte {
+	return vrfOutputsHistory[(round-startingRound)/8]
+}
+
+func convertUint64ToBigEndianBytes(num uint64) []byte {
+	res := make([]byte, 8)
+	binary.BigEndian.PutUint64(res, num)
+	return res
+}
+
+func testNonMultipleOf8Rounds(round, appID uint64, serviceAccount crypto.Account, vrfOutput []byte, sp types.SuggestedParams,
+	algodClient *algod.Client) error {
+
 	var atc future.AtomicTransactionComposer
-	userSeed := getRandomUserSeed()
-	err := addGetMethodCall(&atc, round, appID, serviceAccount, sp, userSeed)
-	if err != nil {
-		log.Errorf("error in addGetMethodCall for round %d: %v", round, err)
-		return
+	for i := 0; i < 7; i++ {
+		r := uint64(i) + round - 7
+		err := addGetOrMustGetMethodCall(&atc, r, appID, serviceAccount, sp, []byte{}, "get")
+		if err != nil {
+			return fmt.Errorf("error in addGetOrMustGetMethodCall for round %d: %v", r, err)
+		}
+		err = addGetOrMustGetMethodCall(&atc, r, appID, serviceAccount, sp, []byte{}, "must_get")
+		if err != nil {
+			return fmt.Errorf("error in addGetOrMustGetMethodCall for round %d: %v", r, err)
+		}
 	}
 	result, err := atc.Execute(algodClient, context.Background(), 3)
 	if err != nil {
-		log.Errorf("error in atc.Execute for round %d: %v", round, err)
-		return
+		return fmt.Errorf("error in atc.Execute for round %d: %v", round, err)
+	}
+	if len(result.MethodResults) != 7*2 {
+		return fmt.Errorf("didn't get enough MethodResults for round %d", round)
+	}
+
+	storedVRFOutput := vrfOutput[:StoredVrfOutputLen] // we truncate the VRF output to StoredVrfOutputLen bytes
+
+	for i := 0; i < 7; i++ {
+		r := uint64(i) + round - 7
+		// Verify the random output matches what it should be
+		roundBytes := convertUint64ToBigEndianBytes(r)
+		hashedOutput := sha3.Sum256(append(storedVRFOutput[:], roundBytes...))
+		// ABI adds 0x0020 at the beginning, as it's the length of the output
+		abiHashedOutputB64 := base64.StdEncoding.EncodeToString(append([]byte{0x00, 0x20}, hashedOutput[:]...))
+		b64ReturnedFromGet := base64.StdEncoding.EncodeToString(result.MethodResults[2*i+0].RawReturnValue)
+		b64ReturnedFromMustGet := base64.StdEncoding.EncodeToString(result.MethodResults[2*i+1].RawReturnValue)
+		if abiHashedOutputB64 != b64ReturnedFromGet {
+			return fmt.Errorf("outputs don't match for round %d TXID %s %s != %s", r, result.TxIDs[2*i+0], b64ReturnedFromGet, abiHashedOutputB64)
+		}
+		if abiHashedOutputB64 != b64ReturnedFromMustGet {
+			return fmt.Errorf("outputs don't match for round %d TXID %s %s != %s", r, result.TxIDs[2*i+1], b64ReturnedFromGet, abiHashedOutputB64)
+		}
+	}
+
+	return nil
+
+}
+
+func getMainGlobalStateSlot(appID uint64, algodClient *algod.Client) (string, error) {
+	appRes, err := algodClient.GetApplicationByID(appID).Do(context.Background())
+	if err != nil {
+		return "", fmt.Errorf("failed getting app info for appID %d", appID)
+	}
+	for _, kv := range appRes.Params.GlobalState {
+		if kv.Key == "" {
+			return kv.Value.Bytes, nil
+		}
+	}
+	return "", fmt.Errorf("can't find main slot for appID %d", appID)
+}
+
+func testFailedSubmit(round uint64, vrfPrivateKey ed25519.PrivateKey, serviceAccount crypto.Account, appID,
+	dummyAppID uint64, algodClient *algod.Client, suggestedParams types.SuggestedParams) error {
+	//suggestedParams.FirstRoundValid = types.Round(round - 16 + 1)
+	//suggestedParams.LastRoundValid = suggestedParams.FirstRoundValid + 1000
+	err := handleCurrentRound(round, vrfPrivateKey, serviceAccount, appID, dummyAppID, algodClient, suggestedParams, nil)
+	if err == nil || !strings.Contains(err.Error(), "logic eval error: assert failed pc=693. Details: pc=693, opcodes=callsub label23\\n||\\nassert\\n") {
+		return fmt.Errorf("error in handleCurrentRound for round %d: expected failure got err == %v", round, err)
+	}
+	return nil
+}
+
+func runSomeTests(round, appID, dummyAppID uint64, serviceAccount crypto.Account, algodClient *algod.Client,
+	vrfPrivateKey ed25519.PrivateKey) error {
+
+	if round%3 != 1 {
+		// every test adds at least one new block meaning we get to a point where we're behind more than 1000 blocks quickly
+		// and since we're using algod to get the block seed we get stuck.
+		// a better solution would be to batch all tests in a group of transactions which requires refactoring
+		log.Debugf("not testing")
+		return nil
+	}
+	sp, err := getSuggestedParams(algodClient)
+	if err != nil {
+		return fmt.Errorf("failed getting suggestedParams from algod")
+	}
+
+	log.Debugf("testing that round was submitted with 'get' method")
+	getUserData := getRandomUserData()
+	vrfOutput := getVrfOutputForRound(round)
+	getResult, err := testVrfSubmitted(round, appID, serviceAccount, vrfOutput, getUserData, sp, algodClient, "get")
+	if err != nil {
+		return fmt.Errorf("error getting VRF from smart contract: %v", err)
+	}
+	log.Debugf("testing that round was submitted with 'must_get' method")
+	mustGetUserData := getRandomUserData()
+	mustGetResult, err := testVrfSubmitted(round, appID, serviceAccount, vrfOutput, mustGetUserData, sp, algodClient, "must_get")
+	if err != nil {
+		return fmt.Errorf("error getting VRF from smart contract: %v", err)
+	}
+	res, ok := resultsHistory[getResult]
+	if ok {
+		return fmt.Errorf("random value from 'get' already seen in round %d with user_data %v and method %s", res.Round, res.UserData, res.Method)
+	}
+	resultsHistory[getResult] = Result{
+		Round:    round,
+		UserData: getUserData,
+		Method:   "get",
+	}
+	res, ok = resultsHistory[mustGetResult]
+	if ok {
+		return fmt.Errorf("random value from 'must_get' already seen in round %d with user_data %v and method %s", res.Round, res.UserData, res.Method)
+	}
+	resultsHistory[mustGetResult] = Result{
+		Round:    round,
+		UserData: mustGetUserData,
+		Method:   "must_get",
+	}
+	// this must always succeed, even when last_round_stored - first_round stored is higher than 1512 (NbStoredVrfOutputs*VrfRoundMultiple)
+	// the SC stores VRF outputs for the last 1512 rounds.
+	// since the last VRF output submitted was for block number `round`, round - 1512 is out of range of the values stored
+	log.Debugf("testing 'must_get' with round lower than range")
+	err = testGetOrMustGetFail(round-NbStoredVrfOutputs*VrfRoundMultiple, appID, serviceAccount, sp, algodClient, "must_get")
+	if err != nil {
+		return fmt.Errorf("error testMustGetFail: %v", err)
+	}
+	// this must always succeed, even when last_round_stored - first_round stored is higher than 1512
+	log.Debugf("testing 'get' with round lower than range")
+	err = testGetOrMustGetFail(round-NbStoredVrfOutputs*VrfRoundMultiple, appID, serviceAccount, sp, algodClient, "get")
+	if err != nil {
+		return fmt.Errorf("error testGetFail: %v", err)
+	}
+	log.Debugf("testing 'must_get' with round higher than range")
+	err = testGetOrMustGetFail(round+1, appID, serviceAccount, sp, algodClient, "must_get")
+	if err != nil {
+		return fmt.Errorf("error testMustGetFail: %v", err)
+	}
+	log.Debugf("testing 'get' with round higher than range")
+	err = testGetOrMustGetFail(round+1, appID, serviceAccount, sp, algodClient, "get")
+	if err != nil {
+		return fmt.Errorf("error testGetFail: %v", err)
+	}
+	if round >= startingRound+VrfRoundMultiple {
+		log.Debugf("testing rounds that are not multiple of 8")
+		err = testNonMultipleOf8Rounds(round, appID, serviceAccount, vrfOutput, sp, algodClient)
+		if err != nil {
+			return fmt.Errorf("error testNonMultipleOf8Rounds: %v", err)
+		}
+	}
+	if round >= startingRound+(NbStoredVrfOutputs-1)*VrfRoundMultiple {
+		// testing we can get the oldest VRF output in global storage
+		mainSlotB64, err := getMainGlobalStateSlot(appID, algodClient)
+		if err != nil {
+			return fmt.Errorf("error getting main slot: %v", err)
+		}
+		mainSlot, err := base64.StdEncoding.DecodeString(mainSlotB64)
+		if err != nil {
+			return fmt.Errorf("error decoding main slot: %v", err)
+		}
+		firstStoredRound := binary.BigEndian.Uint64(mainSlot[8:16])
+		// the SC stores VRF outputs for the last 1512 (NbStoredVrfOutputs*VrfRoundMultiple) rounds,
+		// and since the last VRF output submitted was for block number `round`,
+		// `round - (NbStoredVrfOutputs - 1) * VrfRoundMultiple` is the first value in range of the values stored
+		oldestStoredVrfRound := round - (NbStoredVrfOutputs-1)*VrfRoundMultiple
+		if firstStoredRound != oldestStoredVrfRound {
+			return fmt.Errorf("firstStoredRound %d != %d oldestStoredVrfRound", firstStoredRound, oldestStoredVrfRound)
+		}
+		oldestStoredVrfOutput := getVrfOutputForRound(oldestStoredVrfRound)
+		log.Debugf("testing getting VRF output long after it was submitted with 'get'")
+		_, err = testVrfSubmitted(oldestStoredVrfRound, appID, serviceAccount, oldestStoredVrfOutput, getUserData, sp, algodClient, "get")
+		if err != nil {
+			return fmt.Errorf("error getting VRF from smart contract: %v", err)
+		}
+		log.Debugf("testing getting VRF output long after it was submitted with 'must_get'")
+		_, err = testVrfSubmitted(oldestStoredVrfRound, appID, serviceAccount, oldestStoredVrfOutput, mustGetUserData, sp, algodClient, "must_get")
+		if err != nil {
+			return fmt.Errorf("error getting VRF from smart contract: %v", err)
+		}
+	}
+	// TODO add recovery challenges
+	latestRound, err := getLatestRound(algodClient)
+	if err != nil {
+		return fmt.Errorf("failed to get status from algod")
+	}
+	futureRound := round + 16
+	if futureRound+NbRetainedBlocks > latestRound+1+NbGraceBlocks {
+		log.Debugf("testing submitting not subsequent rounds")
+		err = testFailedSubmit(futureRound, vrfPrivateKey, serviceAccount, appID, dummyAppID, algodClient, sp)
+		if err != nil {
+			return fmt.Errorf("failed testFailedSubmit %v", err)
+		}
+	}
+	return nil
+}
+
+func testGetOrMustGetFail(round, appID uint64, serviceAccount crypto.Account, sp types.SuggestedParams,
+	algodClient *algod.Client, methodName string) error {
+	var atc future.AtomicTransactionComposer
+	err := addGetOrMustGetMethodCall(&atc, round, appID, serviceAccount, sp, []byte{}, methodName)
+	if err != nil {
+		return fmt.Errorf("error in addGetMethodCall for round %d: %v", round, err)
+	}
+	result, err := atc.Execute(algodClient, context.Background(), 3)
+	if methodName == "get" {
+		if err != nil {
+			return fmt.Errorf("error in atc.Execute for round %d: %v", round, err)
+		}
+		if len(result.MethodResults) < 1 {
+			return fmt.Errorf("didn't get MethodResults for round %d", round)
+		}
+		b64Returned := base64.StdEncoding.EncodeToString(result.MethodResults[0].RawReturnValue)
+		expected := "AAA="
+		if b64Returned != expected {
+			return fmt.Errorf("expected response to be %s, got %s", expected, b64Returned)
+		}
+	} else {
+		//log.Debugf("err is %v", err)
+		if err == nil || !strings.Contains(err.Error(), "logic eval error: assert failed pc=862. Details: pc=862, opcodes=load 14\\ncallsub label26\\nassert\\n") {
+			return fmt.Errorf("error in atc.Execute for round %d: expected failure got err == %v", round, err)
+		}
+	}
+	return nil
+}
+
+func testVrfSubmitted(round, appID uint64, serviceAccount crypto.Account, vrfOutput, userData []byte, sp types.SuggestedParams,
+	algodClient *algod.Client, methodName string) (string, error) {
+	var atc future.AtomicTransactionComposer
+	err := addGetOrMustGetMethodCall(&atc, round, appID, serviceAccount, sp, userData, methodName)
+	if err != nil {
+		return "", fmt.Errorf("error in addGetOrMustGetMethodCall for round %d: %v", round, err)
+	}
+	result, err := atc.Execute(algodClient, context.Background(), 3)
+	if err != nil {
+		return "", fmt.Errorf("error in atc.Execute for round %d: %v", round, err)
 	}
 	if len(result.MethodResults) < 1 {
-		log.Errorf("didn't get MethodResults for round %d", round)
-		return
+		return "", fmt.Errorf("didn't get MethodResults for round %d", round)
 	}
 
 	// Verify the random output matches what it should be
-	roundBytes := make([]byte, 8)
-	binary.BigEndian.PutUint64(roundBytes, round)
-	storedVRFOutput := vrfOutput[:32] // we truncate the VRF output to 32 bytes
+	roundBytes := convertUint64ToBigEndianBytes(round)
+	storedVRFOutput := vrfOutput[:StoredVrfOutputLen] // we truncate the VRF output to StoredVrfOutputLen bytes
 
-	log.Debugf("stored VRF output should be: %v", base64.StdEncoding.EncodeToString(storedVRFOutput))
+	//log.Debugf("stored VRF output should be: %v", base64.StdEncoding.EncodeToString(storedVRFOutput))
 
-	hashedOutput := sha3.Sum256(append(storedVRFOutput[:], append(roundBytes, userSeed...)...))
+	hashedOutput := sha3.Sum256(append(storedVRFOutput[:], append(roundBytes, userData...)...))
 	// ABI adds 0x0020 at the beginning, as it's the length of the output
 	abiHashedOutputB64 := base64.StdEncoding.EncodeToString(append([]byte{0x00, 0x20}, hashedOutput[:]...))
-	log.Debugf("hashed output (b64) for round %d is %v", round, abiHashedOutputB64)
+	//log.Debugf("hashed output (b64) for round %d is %v", round, abiHashedOutputB64)
 
 	b64Returned := base64.StdEncoding.EncodeToString(result.MethodResults[0].RawReturnValue)
 	if abiHashedOutputB64 != b64Returned {
-		log.Errorf("outputs don't match for round %d TXID %s %s != %s", round, result.TxIDs[0], b64Returned, abiHashedOutputB64)
-		return
+		return "", fmt.Errorf("outputs don't match for round %d TXID %s %s != %s", round, result.TxIDs[0], b64Returned, abiHashedOutputB64)
 	}
-	log.Debugf("passed tests: ABI hashed output (b64) for round %d is %v", round, abiHashedOutputB64)
+	//log.Debugf("passed tests: ABI hashed output (b64) for round %d is %v", round, abiHashedOutputB64)
+	return b64Returned, nil
 }
 
 // generates a group of 3 application calls:
 // the 1st App call is to the smart-contract to respond the VRF output, while the 2nd and 3rd are dummy app calls used
 // to increase the cost pool.
-func buildAnswerPhaseTransactionsGroupABI(appID, dummyAppID uint64, serviceAccount crypto.Account, vrfRequest models2.VrfRequest,
+func buildAnswerPhaseTransactionsGroupABI(appID, dummyAppID, round uint64, serviceAccount crypto.Account,
 	vrfProof []byte, sp types.SuggestedParams) ([]byte, error) {
 
 	var atc future.AtomicTransactionComposer
@@ -192,33 +429,24 @@ func buildAnswerPhaseTransactionsGroupABI(appID, dummyAppID uint64, serviceAccou
 	if err != nil {
 		return nil, fmt.Errorf("error abi.MethodFromSignature(methodSig) %v", err)
 	}
-	sp.FirstRoundValid = types.Round(vrfRequest.BlockNumber + 1)
-	sp.LastRoundValid = sp.FirstRoundValid + 1000
-	log.Debugf("starting round %d", vrfRequest.BlockNumber)
-	var vrfProofArray [80]byte
+	//sp.FirstRoundValid = types.Round(round + 1)
+	//sp.LastRoundValid = sp.FirstRoundValid + 1000
+	var vrfProofArray [VrfProofLen]byte
 	copy(vrfProofArray[:], vrfProof)
 	methodCallParams := future.AddMethodCallParams{
 		AppID:           appID,
 		Method:          method,
-		MethodArgs:      []interface{}{vrfRequest.BlockNumber, vrfProofArray},
+		MethodArgs:      []interface{}{round, vrfProofArray},
 		Sender:          serviceAccount.Address,
 		SuggestedParams: sp,
-		OnComplete:      0,
-		ExtraPages:      0,
-		Note:            nil,
-		Lease:           [32]byte{},
-		RekeyTo:         types.Address{},
 		Signer:          signer,
-		ForeignApps:     nil,
-		ForeignAssets:   nil,
-		ForeignAccounts: nil,
 	}
 	err = atc.AddMethodCall(methodCallParams)
 	if err != nil {
 		return nil, fmt.Errorf("error atc.AddMethodCall(methodCallParams) %v", err)
 	}
 
-	for i := 0; i < numOfDummyTxns; i++ {
+	for i := 0; i < NumOfDummyTxns; i++ {
 		dummyAppCall, err := future.MakeApplicationNoOpTx(
 			dummyAppID,
 			nil,
@@ -282,50 +510,44 @@ func computeAndSignVrf(blockNumber, blockSeed []byte, oracleVrfKey ed25519.Priva
 }
 
 // handles requests for the current round: computes the VRF output and sends it to the smart-contract
-func handleRequestsForCurrentRound(requestsToHandle []models2.VrfRequest, blockSeed []byte,
-	vrfPrivateKey ed25519.PrivateKey, serviceAccount crypto.Account,
-	suggestedParams types.SuggestedParams, appID, dummyAppID uint64, algodClient *algod.Client) {
-	for _, currentRequestHandled := range requestsToHandle {
-		vrfOutput, vrfProof, err := computeAndSignVrf(
-			currentRequestHandled.BlockNumberBytes,
-			blockSeed,
-			vrfPrivateKey,
-		)
-		if err != nil {
-			log.Warnf("failed computing vrf for %v: %v. skipping...", currentRequestHandled, err)
-			continue
-		}
-
-		stxBytes, err := buildAnswerPhaseTransactionsGroupABI(
-			appID,
-			dummyAppID,
-			serviceAccount,
-			currentRequestHandled,
-			vrfProof,
-			suggestedParams,
-		)
-		if err != nil {
-			log.Warnf(
-				"failed building transactions group for %v: %v. skipping...",
-				currentRequestHandled,
-				err,
-			)
-			continue
-		}
-		txId, err := algodClient.SendRawTransaction(stxBytes).Do(context.Background())
-		if err != nil {
-			log.Warnf(
-				"failed sending transactions group for %v: %v. skipping...",
-				currentRequestHandled,
-				err,
-			)
-			//log.Debugf("stxbytes bas64: %v", base64.StdEncoding.EncodeToString(stxBytes))
-			continue
-		}
-		runSomeTests(currentRequestHandled.BlockNumber, appID, serviceAccount, vrfOutput, suggestedParams, algodClient)
-		log.Infof("Sent transaction %s", txId)
-
+func handleCurrentRound(currentRoundHandled uint64, vrfPrivateKey ed25519.PrivateKey, serviceAccount crypto.Account, appID, dummyAppID uint64, algodClient *algod.Client, suggestedParams types.SuggestedParams, blockSeed []byte) error {
+	blockNumberBytes := convertUint64ToBigEndianBytes(currentRoundHandled)
+	vrfOutput, vrfProof, err := computeAndSignVrf(
+		blockNumberBytes,
+		blockSeed,
+		vrfPrivateKey,
+	)
+	if err != nil {
+		return fmt.Errorf("failed computing vrf for %d: %v", currentRoundHandled, err)
 	}
+
+	stxBytes, err := buildAnswerPhaseTransactionsGroupABI(
+		appID,
+		dummyAppID,
+		currentRoundHandled,
+		serviceAccount,
+		vrfProof,
+		suggestedParams,
+	)
+	if err != nil {
+		return fmt.Errorf(
+			"failed building transactions group for %d: %v",
+			currentRoundHandled,
+			err,
+		)
+	}
+	txId, err := algodClient.SendRawTransaction(stxBytes).Do(context.Background())
+	if err != nil {
+		return fmt.Errorf(
+			"failed sending transactions group for %d: %v",
+			currentRoundHandled,
+			err,
+		)
+		//log.Debugf("stxbytes bas64: %v", base64.StdEncoding.EncodeToString(stxBytes))
+	}
+	vrfOutputsHistory = append(vrfOutputsHistory, vrfOutput)
+	log.Infof("Sent transaction %s\n########################################################", txId)
+	return nil
 }
 
 // getting suggested params with exponential back-off
@@ -360,47 +582,7 @@ func getBlock(algodClient *algod.Client, round uint64) (types.Block, error) {
 	return block, err
 }
 
-// extracts the VRF requests from the heap to handle in the current round
-func getVrfRequestsToHandle(h *tools.VrfRequestsHeap, currentRound uint64) []models2.VrfRequest {
-	var result []models2.VrfRequest
-	for {
-		if len(*h) < 1 {
-			break
-		}
-		top := (*h)[0]
-		if top.BlockNumber > currentRound {
-			log.Infof("handled all requests for round %d", currentRound)
-			break
-		}
-		currentNoteHandled := heap.Pop(h).(models2.VrfRequest)
-		if currentNoteHandled.BlockNumber < currentRound {
-			log.Warnf("found unhandled old request in queue: %v", currentNoteHandled)
-			continue
-		}
-		result = append(result, currentNoteHandled)
-	}
-	return result
-}
-
-func storeRequestsInHeap(h *tools.VrfRequestsHeap, currentRound uint64) {
-	if currentRound%8 == 0 {
-		blockNumberBytes := make([]byte, 8)
-		binary.BigEndian.PutUint64(blockNumberBytes, currentRound)
-		heap.Push(h, models2.VrfRequest{
-			Sender:           types.Address{},
-			BlockNumber:      currentRound,
-			BlockNumberBytes: blockNumberBytes,
-			UserSeed:         nil,
-		})
-		log.Debugf("adding request for round %d", currentRound)
-	}
-}
-
-func sendDummyTxn(algodClient *algod.Client, serviceAccount crypto.Account) {
-	suggestedParams, err := getSuggestedParams(algodClient)
-	if err != nil {
-		panic(err)
-	}
+func sendDummyTxn(algodClient *algod.Client, serviceAccount crypto.Account, suggestedParams types.SuggestedParams) {
 	note := make([]byte, 32)
 	crypto.RandomBytes(note)
 	txn, err := future.MakePaymentTxn(
@@ -496,8 +678,8 @@ func createDummyApp(approvalProgram []byte, appCreatorSK ed25519.PrivateKey, alg
 }
 
 func createABIApp(startingRound, dummyAppID uint64, algodClient *algod.Client, vrfPrivateKey,
-	appCreatorPrivateKey ed25519.PrivateKey, approvalBytes, clearBytes []byte,
-	suggestedParams types.SuggestedParams) (uint64, error) {
+	appCreatorPrivateKey ed25519.PrivateKey, approvalBytes, clearBytes []byte, suggestedParams types.SuggestedParams) (
+	uint64, error) {
 
 	log.Infof("getting block seed for %d", startingRound)
 	block, err := getBlock(algodClient, startingRound)
@@ -505,9 +687,8 @@ func createABIApp(startingRound, dummyAppID uint64, algodClient *algod.Client, v
 		return 0, fmt.Errorf("error getting block seed of block %d from algod", startingRound)
 	}
 
-	blockNumberBytes := make([]byte, 8)
-	binary.BigEndian.PutUint64(blockNumberBytes, startingRound)
-	_, vrfProof, err := computeAndSignVrf(
+	blockNumberBytes := convertUint64ToBigEndianBytes(startingRound)
+	vrfOutput, vrfProof, err := computeAndSignVrf(
 		blockNumberBytes,
 		block.Seed[:],
 		vrfPrivateKey,
@@ -515,6 +696,7 @@ func createABIApp(startingRound, dummyAppID uint64, algodClient *algod.Client, v
 	if err != nil {
 		return 0, fmt.Errorf("failed computing vrf for %d: %v", startingRound, err)
 	}
+	vrfOutputsHistory = append(vrfOutputsHistory, vrfOutput)
 	globalStateSchema := types.StateSchema{
 		NumUint:      0,
 		NumByteSlice: 64,
@@ -537,34 +719,26 @@ func createABIApp(startingRound, dummyAppID uint64, algodClient *algod.Client, v
 	}
 	suggestedParams.FirstRoundValid = types.Round(startingRound + 1)
 	suggestedParams.LastRoundValid = suggestedParams.FirstRoundValid + 1000
-	var vrfProofArray [80]byte
+	var vrfProofArray [VrfProofLen]byte
 	copy(vrfProofArray[:], vrfProof)
 	methodCallParams := future.AddMethodCallParams{
-		AppID:           0,
 		Method:          method,
 		MethodArgs:      []interface{}{startingRound, vrfProofArray, vrfPrivateKey[32:]},
 		Sender:          appCreatorAccount.Address,
 		SuggestedParams: suggestedParams,
-		OnComplete:      0,
+		OnComplete:      types.NoOpOC,
 		ApprovalProgram: approvalBytes,
 		ClearProgram:    clearBytes,
 		GlobalSchema:    globalStateSchema,
 		LocalSchema:     localStateSchema,
-		ExtraPages:      0,
-		Note:            nil,
-		Lease:           [32]byte{},
-		RekeyTo:         types.Address{},
 		Signer:          signer,
-		ForeignApps:     nil,
-		ForeignAssets:   nil,
-		ForeignAccounts: nil,
 	}
 	err = atc.AddMethodCall(methodCallParams)
 	if err != nil {
 		return 0, fmt.Errorf("error atc.AddMethodCall(methodCallParams) %v", err)
 	}
 
-	for i := 0; i < numOfDummyTxns; i++ {
+	for i := 0; i < NumOfDummyTxns; i++ {
 		dummyAppCall, err := future.MakeApplicationNoOpTx(
 			dummyAppID,
 			nil,
@@ -642,48 +816,94 @@ func compileTeal(approvalProgramFilename, clearProgramFilename string, algodClie
 	return compiledApprovalBytes, compiledClearBytes, nil
 }
 
-func mainLoop(startingRound, appID, dummyAppID uint64, algodClient *algod.Client,
+func getLatestRound(algodClient *algod.Client) (uint64, error) {
+	var status models.NodeStatus
+	err := tools.Retry(1, 5,
+		func() error {
+			var err error
+			status, err = algodClient.Status().Do(context.Background())
+			return err
+		},
+		func(err error) {
+			log.Warnf("failed to get status from algod, trying again...: %v", err)
+		},
+	)
+	return status.LastRound, err
+}
+
+func floorToMultipleOfX(num, x uint64) uint64 {
+	return (num / x) * x
+}
+
+func ceilingToMultipleOfX(num, x uint64) uint64 {
+	return ((num + x - 1) / x) * x
+}
+
+func mainLoop(appID, dummyAppID uint64, algodClient *algod.Client,
 	vrfPrivateKey ed25519.PrivateKey, serviceAccount crypto.Account) {
-	waitFactor := float64(1)
-	currentRound := startingRound
-	h := &tools.VrfRequestsHeap{}
-	heap.Init(h)
+	currentRoundHandled := startingRound + VrfRoundMultiple
+	isRecovering := false
 	for {
-		sendDummyTxn(algodClient, serviceAccount)
-		sleepTime := time.Duration(waitFactor*waitBetweenBlocksMS) * time.Millisecond
-		log.Debugf("sleeping %v", sleepTime)
-		time.Sleep(sleepTime)
-
-		storeRequestsInHeap(h, currentRound)
-
-		requestsToHandle := getVrfRequestsToHandle(h, currentRound)
-		if len(requestsToHandle) != 0 {
-			log.Infof("getting block seed for %d", currentRound)
-			block, err := getBlock(algodClient, currentRound)
-			if err != nil {
-				log.Errorf("error getting block seed of block %d from algod", currentRound)
-				return
+		latestBlockRound, err := getLatestRound(algodClient)
+		if err != nil {
+			log.Errorf("failed to get status from algod")
+			return
+		}
+		suggestedParams, err := getSuggestedParams(algodClient)
+		if err != nil {
+			log.Errorf("failed getting suggestedParams from algod")
+			return
+		}
+		if !isRecovering {
+			if currentRoundHandled%VrfRoundMultiple != 0 {
+				sendDummyTxn(algodClient, serviceAccount, suggestedParams)
 			}
-
-			suggestedParams, err := getSuggestedParams(algodClient)
-			if err != nil {
-				log.Errorf("error getting suggested params from algod: %v", err)
-				return
-			}
-			handleRequestsForCurrentRound(
-				requestsToHandle,
-				block.Seed[:],
-				vrfPrivateKey,
-				serviceAccount,
-				suggestedParams,
-				appID,
-				dummyAppID,
-				algodClient,
-			)
+			sleepTime := time.Duration(WaitBetweenBlocksMS) * time.Millisecond
+			//log.Debugf("sleeping %v", sleepTime)
+			time.Sleep(sleepTime)
+		}
+		nextBlockRound := latestBlockRound + 1 // assuming we're testing on sandnet
+		//log.Debugf("last round %d current round %d", latestBlockRound, currentRoundHandled)
+		// check if we are in recovery
+		// we can only get the block seed of rounds [latestBlockRound - NbRetainedBlocks, latestBlockRound], thus we enter recovery
+		// if we currently handle rounds that are < latestBlockRound - NbRetainedBlocks
+		if currentRoundHandled%VrfRoundMultiple == 0 && latestBlockRound-currentRoundHandled > NbRetainedBlocks {
+			currentRoundHandled = floorToMultipleOfX(nextBlockRound-NbRetainedBlocks+VrfRoundMultiple, VrfRoundMultiple)
+			// starting round is a global variable, we set it here mainly to support tests
+			startingRound = currentRoundHandled
+			vrfOutputsHistory = [][]byte{}
+			isRecovering = true
+			log.Infof("\n$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$ starting recovery from round %d", currentRoundHandled)
+		} else if latestBlockRound-currentRoundHandled <= 10 && isRecovering {
+			log.Infof("\n$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$ finished recovery")
+			isRecovering = false
 		}
 
-		waitFactor = computeWaitFactor(currentRound, currentRound)
-		currentRound++
+		if currentRoundHandled%VrfRoundMultiple == 0 {
+			log.Infof("getting block seed for %d", currentRoundHandled)
+			block, err := getBlock(algodClient, currentRoundHandled)
+			if err != nil {
+				log.Errorf("error getting block seed of block %d from algod", currentRoundHandled)
+				return
+			}
+			suggestedParams.FirstRoundValid = types.Round(currentRoundHandled + 1)
+			suggestedParams.LastRoundValid = suggestedParams.FirstRoundValid + 1000
+			err = handleCurrentRound(currentRoundHandled, vrfPrivateKey, serviceAccount, appID, dummyAppID, algodClient, suggestedParams, block.Seed[:])
+			if err != nil {
+				log.Errorf("error handling requests for current round %d: %v", currentRoundHandled, err)
+				return
+			}
+			if !isRecovering {
+				err = runSomeTests(currentRoundHandled, appID, dummyAppID, serviceAccount, algodClient, vrfPrivateKey)
+				if err != nil {
+					log.Errorf("failed tests: %v", err)
+					return
+				}
+			} else {
+				log.Debugf("not testing - in recovery")
+			}
+		}
+		currentRoundHandled++
 	}
 }
 
@@ -692,12 +912,14 @@ func getStartingRound(inputRound uint64, algodClient *algod.Client) (uint64, err
 	if inputRound != 0 {
 		result = inputRound
 	} else {
-		status, err := algodClient.Status().Do(context.Background())
+		lastRound, err := getLatestRound(algodClient)
 		if err != nil {
 			return 0, fmt.Errorf("failed getting status from algod: %v", err)
 		}
-		result = status.LastRound
+		result = lastRound
 	}
+	// get the next round that is a multiple of 8
+	result = ceilingToMultipleOfX(result, VrfRoundMultiple)
 	return result, nil
 }
 
@@ -744,7 +966,7 @@ var RunDaemonCmd = &cobra.Command{
 			log.Error(err)
 			return
 		}
-		startingRound = (startingRound / 8) * 8
+
 		vrfPrivateKey, err := mnemonic.ToPrivateKey(vrfMnemonicString)
 		if err != nil {
 			log.Errorf("invalid vrf mnemonic: %v", err)
@@ -760,20 +982,20 @@ var RunDaemonCmd = &cobra.Command{
 			log.Errorf("invalid service mnemonic: %v", err)
 			return
 		}
-		serviceAddress, err := crypto.GenerateAddressFromSK(servicePrivateKey)
+		serviceAccount, err := crypto.AccountFromPrivateKey(servicePrivateKey)
 		if err != nil {
-			log.Errorf("error in crypto.GenerateAddressFromSK: %v", err)
+			log.Errorf("error in crypto.AccountFromPrivateKey: %v", err)
 			return
-		}
-		serviceAccount := crypto.Account{
-			PrivateKey: servicePrivateKey,
-			Address:    serviceAddress,
 		}
 
 		suggestedParams, err := getSuggestedParams(algodClient)
 		if err != nil {
 			log.Errorf("error getting suggested params from algod: %v", err)
 			return
+		}
+		// dirty workaround for weird issue where no blocks are added if no transactions
+		for i := 0; i < 13; i++ {
+			sendDummyTxn(algodClient, serviceAccount, suggestedParams)
 		}
 
 		log.Info("creating dummy app...")
@@ -784,13 +1006,6 @@ var RunDaemonCmd = &cobra.Command{
 			return
 		}
 		log.Infof("dummy app id: %d\n", dummyAppID)
-		// dirty workaround for weird issue where no blocks are added if no transactions
-		sendDummyTxn(algodClient, serviceAccount)
-		sendDummyTxn(algodClient, serviceAccount)
-		sendDummyTxn(algodClient, serviceAccount)
-		sendDummyTxn(algodClient, serviceAccount)
-		sendDummyTxn(algodClient, serviceAccount)
-		sendDummyTxn(algodClient, serviceAccount)
 		log.Info("creating ABI app...")
 		approvalBytes, clearBytes, err := compileTeal(approvalProgramFilename, clearProgramFilename, algodClient)
 		if err != nil {
@@ -805,31 +1020,12 @@ var RunDaemonCmd = &cobra.Command{
 			return
 		}
 		log.Infof("app id: %d\n", appID)
-		res, err := algodClient.GetApplicationByID(appID).Do(context.Background())
-		if err != nil {
-			log.Error(err)
-			return
-		}
-		for _, kv := range res.Params.GlobalState {
-			if kv.Key == "" {
-				log.Infof("metdata is %s", kv.Value.Bytes)
-				break
-			}
-		}
 
-		startingRound += 8
+		resultsHistory = make(map[string]Result)
 
 		log.Info("running...")
-		// dirty workaround for weird issue where no blocks are added if no transactions
-		sendDummyTxn(algodClient, serviceAccount)
-		sendDummyTxn(algodClient, serviceAccount)
-		sendDummyTxn(algodClient, serviceAccount)
-		sendDummyTxn(algodClient, serviceAccount)
-		sendDummyTxn(algodClient, serviceAccount)
-		sendDummyTxn(algodClient, serviceAccount)
 
 		mainLoop(
-			startingRound,
 			appID,
 			dummyAppID,
 			algodClient,
