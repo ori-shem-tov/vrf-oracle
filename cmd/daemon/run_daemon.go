@@ -9,6 +9,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"io/ioutil"
+	"math"
 	"os"
 	"strings"
 	"time"
@@ -50,8 +51,9 @@ var (
 )
 
 const (
-	WaitBetweenBlocksMS = 1
+	WaitBetweenBlocksMS = 0
 	NumOfDummyTxns      = 9
+
 	// See ./DESIGN.md for definition of indexes, slots, and cells
 	NbVrfSlots         = 63 // number of slots used to store VRF outputs
 	NbVrfCellsPerSlot  = 3
@@ -219,13 +221,16 @@ func getMainGlobalStateSlot(appID uint64, algodClient *algod.Client) (string, er
 	return "", fmt.Errorf("can't find main slot for appID %d", appID)
 }
 
-func testFailedSubmit(round uint64, vrfPrivateKey ed25519.PrivateKey, serviceAccount crypto.Account, appID,
-	dummyAppID uint64, algodClient *algod.Client, suggestedParams types.SuggestedParams) error {
-	//suggestedParams.FirstRoundValid = types.Round(round - 16 + 1)
-	//suggestedParams.LastRoundValid = suggestedParams.FirstRoundValid + 1000
+func testFailedSubmit(round, latestBlockRound uint64, vrfPrivateKey ed25519.PrivateKey, serviceAccount crypto.Account, appID,
+	dummyAppID uint64, algodClient *algod.Client, suggestedParams types.SuggestedParams, errMsg string) error {
+	//suggestedParams.LastRoundValid = types.Round(min(round, latestBlockRound)) + 1
+	//suggestedParams.FirstRoundValid = suggestedParams.LastRoundValid - 1000
+
+	suggestedParams.FirstRoundValid = types.Round(latestBlockRound)
+	suggestedParams.LastRoundValid = suggestedParams.FirstRoundValid + 1
 	err := handleCurrentRound(round, vrfPrivateKey, serviceAccount, appID, dummyAppID, algodClient, suggestedParams, nil)
-	if err == nil || !strings.Contains(err.Error(), "logic eval error: assert failed pc=693. Details: pc=693, opcodes=callsub label23\\n||\\nassert\\n") {
-		return fmt.Errorf("error in handleCurrentRound for round %d: expected failure got err == %v", round, err)
+	if err == nil || !strings.Contains(err.Error(), errMsg) {
+		return fmt.Errorf("error in handleCurrentRound for round %d: expected err == %s got err == %v", round, errMsg, err)
 	}
 	return nil
 }
@@ -233,13 +238,6 @@ func testFailedSubmit(round uint64, vrfPrivateKey ed25519.PrivateKey, serviceAcc
 func runSomeTests(round, appID, dummyAppID uint64, serviceAccount crypto.Account, algodClient *algod.Client,
 	vrfPrivateKey ed25519.PrivateKey) error {
 
-	if round%3 != 1 {
-		// every test adds at least one new block meaning we get to a point where we're behind more than 1000 blocks quickly
-		// and since we're using algod to get the block seed we get stuck.
-		// a better solution would be to batch all tests in a group of transactions which requires refactoring
-		log.Debugf("not testing")
-		return nil
-	}
 	sp, err := getSuggestedParams(algodClient)
 	if err != nil {
 		return fmt.Errorf("failed getting suggestedParams from algod")
@@ -337,19 +335,50 @@ func runSomeTests(round, appID, dummyAppID uint64, serviceAccount crypto.Account
 			return fmt.Errorf("error getting VRF from smart contract: %v", err)
 		}
 	}
-	// TODO add recovery challenges
+
 	latestRound, err := getLatestRound(algodClient)
 	if err != nil {
 		return fmt.Errorf("failed to get status from algod")
 	}
-	futureRound := round + 16
-	if futureRound+NbRetainedBlocks > latestRound+1+NbGraceBlocks {
-		log.Debugf("testing submitting not subsequent rounds")
-		err = testFailedSubmit(futureRound, vrfPrivateKey, serviceAccount, appID, dummyAppID, algodClient, sp)
-		if err != nil {
-			return fmt.Errorf("failed testFailedSubmit %v", err)
+	nextRound := latestRound + 1 // assuming testing on sandnet
+
+	errMsgInvalidRange := "logic eval error: assert failed pc=693. Details: pc=693, opcodes=callsub label23\\n||\\nassert\\n"
+	errMsgInvalidProof := "logic eval error: assert failed pc=386. Details: pc=386, opcodes=intc_2 // 1\\n==\\nassert\\n"
+	errMsgOverflow := "logic eval error: + overflowed. Details: pc=629, opcodes=load 43\\npushint 1000\\n+\\n"
+
+	err = testFailedSubmit(math.MaxUint64, latestRound, vrfPrivateKey, serviceAccount, appID, dummyAppID, algodClient, sp, errMsgOverflow)
+	if err != nil {
+		return fmt.Errorf("failed overflow testFailedSubmit %v", err)
+	}
+	log.Debugf("testing submitting not subsequent rounds")
+	for i := 2; i <= 125; i++ {
+		futureRound := round + uint64(i)*VrfRoundMultiple
+		if futureRound+NbRetainedBlocks > nextRound+NbGraceBlocks {
+			err = testFailedSubmit(futureRound, latestRound, vrfPrivateKey, serviceAccount, appID, dummyAppID, algodClient, sp, errMsgInvalidRange)
+			if err != nil {
+				return fmt.Errorf("failed testFailedSubmit %v futureRound %d", err, futureRound)
+			}
 		}
 	}
+	log.Debugf("nextRound %d", nextRound)
+	for i := 1; i <= 125; i++ {
+		flooredLatestRound := floorToMultipleOfX(latestRound, VrfRoundMultiple)
+		pastRound := flooredLatestRound - uint64(i)*VrfRoundMultiple
+		if flooredLatestRound > uint64(i)*VrfRoundMultiple && pastRound > round+8 {
+			if pastRound+NbRetainedBlocks > nextRound+NbGraceBlocks {
+				err = testFailedSubmit(pastRound, latestRound, vrfPrivateKey, serviceAccount, appID, dummyAppID, algodClient, sp, errMsgInvalidRange)
+				if err != nil {
+					return fmt.Errorf("failed testFailedSubmit %v pastRound %d", err, pastRound)
+				}
+			} else {
+				err = testFailedSubmit(pastRound, latestRound, vrfPrivateKey, serviceAccount, appID, dummyAppID, algodClient, sp, errMsgInvalidProof)
+				if err != nil {
+					return fmt.Errorf("failed testFailedSubmit %v pastRound %d", err, pastRound)
+				}
+			}
+		}
+	}
+
 	return nil
 }
 
