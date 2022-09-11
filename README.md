@@ -16,13 +16,12 @@ The VRF service acts as a beacon and computes a pseudo random value (using VRF) 
 
 Design is detailed in [./DESIGN.md](DESIGN.md).
 
-The code uses the same VRF implementation used by the `crypto` package in `go-algorand`.
-
 ## Requirements
 
 ### Requirements for smart contract
 
-Python 3.10
+* Python 3.10
+* PyTeal 0.17.0
 
 ### Requirements for VRF service
 
