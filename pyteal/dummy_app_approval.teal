@@ -1,0 +1,5 @@
+#pragma version 7
+txn OnCompletion
+int NoOp
+==
+return

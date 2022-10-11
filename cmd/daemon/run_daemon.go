@@ -23,7 +23,6 @@ import (
 	"github.com/algorand/go-algorand-sdk/types"
 	log "github.com/sirupsen/logrus"
 	"github.com/spf13/cobra"
-	"github.com/spf13/pflag"
 	"golang.org/x/crypto/sha3"
 
 	"github.com/ori-shem-tov/vrf-oracle/libsodium-wrapper"
@@ -37,21 +36,23 @@ type Result struct {
 }
 
 var (
-	appCreatorMnemonic      string
-	approvalProgramFilename string
-	clearProgramFilename    string
-	vrfMnemonicString       string // the mnemonic for generating the vrf
-	serviceMnemonicString   string // the mnemonic for the service account (used to send responses to the smart-contract)
-	startingRound           uint64 // the round from which the daemon starts scanning
-	AlgodAddress            = os.Getenv("AF_ALGOD_ADDRESS")
-	AlgodToken              = os.Getenv("AF_ALGOD_TOKEN")
-	logLevelEnv             = strings.ToLower(os.Getenv("VRF_LOG_LEVEL"))
-	vrfOutputsHistory       [][]byte
-	resultsHistory          map[string]Result
+	appCreatorMnemonic       string
+	approvalProgramFilename  string
+	clearProgramFilename     string
+	dummyAppApprovalFilename string
+	dummyAppClearFilename    string
+	vrfMnemonicString        string // the mnemonic for generating the vrf
+	serviceMnemonicString    string // the mnemonic for the service account (used to send responses to the smart-contract)
+	startingRound            uint64 // the round from which the daemon starts scanning
+	AlgodAddress             = os.Getenv("AF_ALGOD_ADDRESS")
+	AlgodToken               = os.Getenv("AF_ALGOD_TOKEN")
+	logLevelEnv              = strings.ToLower(os.Getenv("VRF_LOG_LEVEL"))
+	vrfOutputsHistory        [][]byte
+	resultsHistory           map[string]Result
 )
 
 const (
-	WaitBetweenBlocksMS = 0
+	WaitBetweenBlocksMS = 1
 	NumOfDummyTxns      = 9
 
 	// See ./DESIGN.md for definition of indexes, slots, and cells
@@ -76,46 +77,34 @@ const (
 	NbGraceBlocks    = 2 * VrfRoundMultiple
 )
 
-func MarkFlagRequired(flag *pflag.FlagSet, name string) {
-	err := cobra.MarkFlagRequired(flag, name)
-	if err != nil {
-		panic(err)
-	}
-}
-
-func SetLogger() {
-	log.SetFormatter(&log.TextFormatter{FullTimestamp: true})
-	logLevel := log.WarnLevel
-	if logLevelEnv == "debug" {
-		logLevel = log.DebugLevel
-	} else if logLevelEnv == "info" {
-		logLevel = log.InfoLevel
-	}
-	log.SetLevel(logLevel)
-}
-
 func init() {
-	SetLogger()
+	tools.SetLogger(logLevelEnv)
 
 	RunDaemonCmd.Flags().StringVar(&vrfMnemonicString, "vrf-mnemonic", "",
 		"25-word mnemonic of the oracle for computing vrf (required)")
-	MarkFlagRequired(RunDaemonCmd.Flags(), "vrf-mnemonic")
+	tools.MarkFlagRequired(RunDaemonCmd.Flags(), "vrf-mnemonic")
 
 	RunDaemonCmd.Flags().StringVar(&serviceMnemonicString, "service-mnemonic", "",
 		"25-word mnemonic of the service for writing the response (required)")
-	MarkFlagRequired(RunDaemonCmd.Flags(), "service-mnemonic")
+	tools.MarkFlagRequired(RunDaemonCmd.Flags(), "service-mnemonic")
 
 	RunDaemonCmd.Flags().Uint64Var(&startingRound, "starting-round", 0,
 		"the round to start scanning from (optional. default: current round)")
 
 	RunDaemonCmd.Flags().StringVar(&appCreatorMnemonic, "app-creator-mnemonic", "", "25-word mnemonic of the app creator (required)")
-	MarkFlagRequired(RunDaemonCmd.Flags(), "app-creator-mnemonic")
+	tools.MarkFlagRequired(RunDaemonCmd.Flags(), "app-creator-mnemonic")
 
 	RunDaemonCmd.Flags().StringVar(&approvalProgramFilename, "approval-program", "", "TEAL script of the approval program (required)")
-	MarkFlagRequired(RunDaemonCmd.Flags(), "approval-program")
+	tools.MarkFlagRequired(RunDaemonCmd.Flags(), "approval-program")
 
 	RunDaemonCmd.Flags().StringVar(&clearProgramFilename, "clear-program", "", "TEAL script of the clear program (required)")
-	MarkFlagRequired(RunDaemonCmd.Flags(), "clear-program")
+	tools.MarkFlagRequired(RunDaemonCmd.Flags(), "clear-program")
+
+	RunDaemonCmd.Flags().StringVar(&dummyAppApprovalFilename, "dummy-app-approval", "", "TEAL script of the dummy app approval (required)")
+	tools.MarkFlagRequired(RunDaemonCmd.Flags(), "dummy-app-approval")
+
+	RunDaemonCmd.Flags().StringVar(&dummyAppClearFilename, "dummy-app-clear", "", "TEAL script of the dummy app clear (required)")
+	tools.MarkFlagRequired(RunDaemonCmd.Flags(), "dummy-app-clear")
 
 }
 
@@ -238,7 +227,7 @@ func testFailedSubmit(round, latestBlockRound uint64, vrfPrivateKey ed25519.Priv
 func runSomeTests(round, appID, dummyAppID uint64, serviceAccount crypto.Account, algodClient *algod.Client,
 	vrfPrivateKey ed25519.PrivateKey) error {
 
-	sp, err := getSuggestedParams(algodClient)
+	sp, err := GetSuggestedParams(algodClient)
 	if err != nil {
 		return fmt.Errorf("failed getting suggestedParams from algod")
 	}
@@ -580,7 +569,7 @@ func handleCurrentRound(currentRoundHandled uint64, vrfPrivateKey ed25519.Privat
 }
 
 // getting suggested params with exponential back-off
-func getSuggestedParams(algodClient *algod.Client) (types.SuggestedParams, error) {
+func GetSuggestedParams(algodClient *algod.Client) (types.SuggestedParams, error) {
 	var sp types.SuggestedParams
 	err := tools.Retry(1, 5,
 		func() error {
@@ -687,9 +676,9 @@ func waitForTx(algodClient *algod.Client, txID string) (models.PendingTransactio
 	return res, err
 }
 
-func createDummyApp(approvalProgram []byte, appCreatorSK ed25519.PrivateKey, algodClient *algod.Client,
+func CreateDummyApp(approvalProgram, clearProgram []byte, appCreatorSK ed25519.PrivateKey, algodClient *algod.Client,
 	suggestedParams types.SuggestedParams) (uint64, error) {
-	stxBytes, err := generateSignedDummyAppCreate(approvalProgram, approvalProgram, types.StateSchema{},
+	stxBytes, err := generateSignedDummyAppCreate(approvalProgram, clearProgram, types.StateSchema{},
 		types.StateSchema{}, appCreatorSK, nil, suggestedParams)
 	if err != nil {
 		return 0, err
@@ -706,26 +695,9 @@ func createDummyApp(approvalProgram []byte, appCreatorSK ed25519.PrivateKey, alg
 	return res.ApplicationIndex, nil
 }
 
-func createABIApp(startingRound, dummyAppID uint64, algodClient *algod.Client, vrfPrivateKey,
-	appCreatorPrivateKey ed25519.PrivateKey, approvalBytes, clearBytes []byte, suggestedParams types.SuggestedParams) (
+func CreateABIApp(startingRound, dummyAppID uint64, algodClient *algod.Client, vrfPublicKey ed25519.PublicKey, appCreatorPrivateKey ed25519.PrivateKey,
+	vrfProof, approvalBytes, clearBytes []byte, suggestedParams types.SuggestedParams) (
 	uint64, error) {
-
-	log.Infof("getting block seed for %d", startingRound)
-	block, err := getBlock(algodClient, startingRound)
-	if err != nil {
-		return 0, fmt.Errorf("error getting block seed of block %d from algod", startingRound)
-	}
-
-	blockNumberBytes := convertUint64ToBigEndianBytes(startingRound)
-	vrfOutput, vrfProof, err := computeAndSignVrf(
-		blockNumberBytes,
-		block.Seed[:],
-		vrfPrivateKey,
-	)
-	if err != nil {
-		return 0, fmt.Errorf("failed computing vrf for %d: %v", startingRound, err)
-	}
-	vrfOutputsHistory = append(vrfOutputsHistory, vrfOutput)
 	globalStateSchema := types.StateSchema{
 		NumUint:      0,
 		NumByteSlice: 64,
@@ -752,7 +724,7 @@ func createABIApp(startingRound, dummyAppID uint64, algodClient *algod.Client, v
 	copy(vrfProofArray[:], vrfProof)
 	methodCallParams := future.AddMethodCallParams{
 		Method:          method,
-		MethodArgs:      []interface{}{startingRound, vrfProofArray, vrfPrivateKey[32:]},
+		MethodArgs:      []interface{}{startingRound, vrfProofArray, vrfPublicKey[:]},
 		Sender:          appCreatorAccount.Address,
 		SuggestedParams: suggestedParams,
 		OnComplete:      types.NoOpOC,
@@ -813,7 +785,32 @@ func createABIApp(startingRound, dummyAppID uint64, algodClient *algod.Client, v
 	return res.ApplicationIndex, nil
 }
 
-func compileTeal(approvalProgramFilename, clearProgramFilename string, algodClient *algod.Client) ([]byte, []byte, error) {
+func createABIAppWithVRFKey(startingRound, dummyAppID uint64, algodClient *algod.Client, vrfPrivateKey,
+	appCreatorPrivateKey ed25519.PrivateKey, approvalBytes, clearBytes []byte, suggestedParams types.SuggestedParams) (
+	uint64, error) {
+
+	log.Infof("getting block seed for %d", startingRound)
+	block, err := getBlock(algodClient, startingRound)
+	if err != nil {
+		return 0, fmt.Errorf("error getting block seed of block %d from algod", startingRound)
+	}
+
+	blockNumberBytes := convertUint64ToBigEndianBytes(startingRound)
+	vrfOutput, vrfProof, err := computeAndSignVrf(
+		blockNumberBytes,
+		block.Seed[:],
+		vrfPrivateKey,
+	)
+	if err != nil {
+		return 0, fmt.Errorf("failed computing vrf for %d: %v", startingRound, err)
+	}
+	log.Debugf("proof B64 is %s", base64.StdEncoding.EncodeToString(vrfProof))
+	vrfOutputsHistory = append(vrfOutputsHistory, vrfOutput)
+	return CreateABIApp(startingRound, dummyAppID, algodClient, vrfPrivateKey.Public().(ed25519.PublicKey),
+		appCreatorPrivateKey, vrfProof, approvalBytes, clearBytes, suggestedParams)
+}
+
+func CompileTeal(approvalProgramFilename, clearProgramFilename string, algodClient *algod.Client) ([]byte, []byte, error) {
 	// #nosec G304
 	approval, err := ioutil.ReadFile(approvalProgramFilename)
 	if err != nil {
@@ -878,7 +875,7 @@ func mainLoop(appID, dummyAppID uint64, algodClient *algod.Client,
 			log.Errorf("failed to get status from algod")
 			return
 		}
-		suggestedParams, err := getSuggestedParams(algodClient)
+		suggestedParams, err := GetSuggestedParams(algodClient)
 		if err != nil {
 			log.Errorf("failed getting suggestedParams from algod")
 			return
@@ -896,7 +893,7 @@ func mainLoop(appID, dummyAppID uint64, algodClient *algod.Client,
 		// check if we are in recovery
 		// we can only get the block seed of rounds [latestBlockRound - NbRetainedBlocks, latestBlockRound], thus we enter recovery
 		// if we currently handle rounds that are < latestBlockRound - NbRetainedBlocks
-		if currentRoundHandled%VrfRoundMultiple == 0 && latestBlockRound-currentRoundHandled > NbRetainedBlocks {
+		if currentRoundHandled%VrfRoundMultiple == 0 && latestBlockRound > currentRoundHandled+NbRetainedBlocks {
 			currentRoundHandled = floorToMultipleOfX(nextBlockRound-NbRetainedBlocks+VrfRoundMultiple, VrfRoundMultiple)
 			// starting round is a global variable, we set it here mainly to support tests
 			startingRound = currentRoundHandled
@@ -936,7 +933,7 @@ func mainLoop(appID, dummyAppID uint64, algodClient *algod.Client,
 	}
 }
 
-func getStartingRound(inputRound uint64, algodClient *algod.Client) (uint64, error) {
+func GetStartingRound(inputRound uint64, algodClient *algod.Client) (uint64, error) {
 	var result uint64
 	if inputRound != 0 {
 		result = inputRound
@@ -952,45 +949,21 @@ func getStartingRound(inputRound uint64, algodClient *algod.Client) (uint64, err
 	return result, nil
 }
 
-func InitClients(algodAddress, algodToken string) (*algod.Client, error) {
-	var failedClients []string
-	algodClient, err := algod.MakeClient(algodAddress, algodToken)
-	if err != nil {
-		failedClients = append(failedClients, "algod")
-		log.Error(err)
-	}
-	if len(failedClients) > 0 {
-		err = fmt.Errorf("failed creating the following client(s): %s", strings.Join(failedClients, ","))
-	}
-	return algodClient, err
-}
-
-func TestEnvironmentVariables() error {
-	var missing []string
-	if AlgodAddress == "" {
-		missing = append(missing, "AF_ALGOD_ADDRESS")
-	}
-	if len(missing) > 0 {
-		return fmt.Errorf("missing %s environment variable(s)", strings.Join(missing, ","))
-	}
-	return nil
-}
-
 var RunDaemonCmd = &cobra.Command{
 	Use:   "run-daemon",
 	Short: "runs the daemon",
 	Run: func(cmd *cobra.Command, args []string) {
-		err := TestEnvironmentVariables()
+		err := tools.TestEnvironmentVariables(AlgodAddress)
 		if err != nil {
 			log.Error(err)
 			return
 		}
-		algodClient, err := InitClients(AlgodAddress, AlgodToken)
+		algodClient, err := tools.InitClients(AlgodAddress, AlgodToken)
 		if err != nil {
 			log.Error(err)
 			return
 		}
-		startingRound, err = getStartingRound(startingRound, algodClient)
+		startingRound, err = GetStartingRound(startingRound, algodClient)
 		if err != nil {
 			log.Error(err)
 			return
@@ -1017,7 +990,7 @@ var RunDaemonCmd = &cobra.Command{
 			return
 		}
 
-		suggestedParams, err := getSuggestedParams(algodClient)
+		suggestedParams, err := GetSuggestedParams(algodClient)
 		if err != nil {
 			log.Errorf("error getting suggested params from algod: %v", err)
 			return
@@ -1028,7 +1001,12 @@ var RunDaemonCmd = &cobra.Command{
 		}
 
 		log.Info("creating dummy app...")
-		dummyAppID, err := createDummyApp([]byte{0x07, 0x20, 0x01, 0x01, 0x22}, appCreatorPrivateKey, algodClient,
+		dummyApprovalBytes, dummyClearBytes, err := CompileTeal(dummyAppApprovalFilename, dummyAppClearFilename, algodClient)
+		if err != nil {
+			log.Error(err)
+			return
+		}
+		dummyAppID, err := CreateDummyApp(dummyApprovalBytes, dummyClearBytes, appCreatorPrivateKey, algodClient,
 			suggestedParams)
 		if err != nil {
 			log.Error(err)
@@ -1036,12 +1014,12 @@ var RunDaemonCmd = &cobra.Command{
 		}
 		log.Infof("dummy app id: %d\n", dummyAppID)
 		log.Info("creating ABI app...")
-		approvalBytes, clearBytes, err := compileTeal(approvalProgramFilename, clearProgramFilename, algodClient)
+		approvalBytes, clearBytes, err := CompileTeal(approvalProgramFilename, clearProgramFilename, algodClient)
 		if err != nil {
 			log.Error(err)
 			return
 		}
-		appID, err := createABIApp(
+		appID, err := createABIAppWithVRFKey(
 			startingRound, dummyAppID, algodClient, vrfPrivateKey,
 			appCreatorPrivateKey, approvalBytes, clearBytes, suggestedParams)
 		if err != nil {

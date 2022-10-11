@@ -7,6 +7,7 @@ import (
 
 func init() {
 	rootCmd.AddCommand(daemon.RunDaemonCmd)
+	rootCmd.AddCommand(DeployAppCmd)
 }
 
 var rootCmd = &cobra.Command{

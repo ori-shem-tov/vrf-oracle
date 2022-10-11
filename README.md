@@ -64,6 +64,8 @@ This service can take the following arguments:
       --app-creator-mnemonic string   25-word mnemonic of the app creator (required)
       --approval-program string       TEAL script of the approval program (required)
       --clear-program string          TEAL script of the clear program (required)
+      --dummy-app-approval            TEAL script of the dummy app approval (required)
+      --dummy-app-clear               TEAL script of the dummy app clear (required)
       --starting-round uint           the round to start scanning from (optional. default: current round)
       --service-mnemonic string       25-word mnemonic of the service for writing the response (required)
       --vrf-mnemonic string           25-word mnemonic of the oracle for computing vrf (required)
@@ -137,7 +139,8 @@ go run ./cmd run-daemon \
 --app-creator-mnemonic "chat glory west mobile desk coin hockey swallow tilt chunk task model hidden helmet toddler tortoise always afraid absorb valve bar distance history absorb exercise" \
 --approval-program pyteal/vrf_beacon_abi_approval.teal \
 --clear-program pyteal/vrf_beacon_abi_clear.teal \
---starting-round 8
+--dummy-app-approval pyteal/dummy_app_approval.teal \
+--dummy-app-clear pyteal/dummy_app_clear.teal
 ```
 
 ## Misc notes
