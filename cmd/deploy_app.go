@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/base64"
+	"github.com/algorand/go-algorand-sdk/crypto"
 	"github.com/algorand/go-algorand-sdk/mnemonic"
 	"github.com/algorand/go-algorand-sdk/types"
 	"github.com/ori-shem-tov/vrf-oracle/cmd/daemon"
@@ -82,6 +83,12 @@ var DeployAppCmd = &cobra.Command{
 			return
 		}
 
+		appCreatorAccount, err := crypto.AccountFromPrivateKey(appCreatorPrivateKey)
+		if err != nil {
+			log.Errorf("error in crypto.AccountFromPrivateKey: %v", err)
+			return
+		}
+
 		suggestedParams, err := daemon.GetSuggestedParams(algodClient)
 		if err != nil {
 			log.Errorf("error getting suggested params from algod: %v", err)
@@ -94,7 +101,7 @@ var DeployAppCmd = &cobra.Command{
 			log.Error(err)
 			return
 		}
-		dummyAppID, err := daemon.CreateDummyApp(dummyApprovalBytes, dummyClearBytes, appCreatorPrivateKey, algodClient,
+		dummyAppID, err := daemon.DeployDummyApp(dummyApprovalBytes, dummyClearBytes, appCreatorPrivateKey, algodClient,
 			suggestedParams)
 		if err != nil {
 			log.Error(err)
@@ -117,8 +124,8 @@ var DeployAppCmd = &cobra.Command{
 			log.Error(err)
 			return
 		}
-		appID, err := daemon.CreateABIApp(
-			startingRound, dummyAppID, algodClient, vrfPKAddr[:], appCreatorPrivateKey, vrfProof, approvalBytes, clearBytes, suggestedParams)
+		appID, err := daemon.DeployABIApp(
+			startingRound, dummyAppID, algodClient, vrfPKAddr[:], appCreatorAccount, vrfProof, approvalBytes, clearBytes, suggestedParams)
 		if err != nil {
 			log.Error(err)
 			return

@@ -476,14 +476,14 @@ if __name__ == '__main__':
         print(json.dumps(contract.dictify(), indent=4), file=f)
         print(f'compiled {file_name}')
 
-    dummy_app_approval = compileTeal(Txn.on_completion() == OnComplete.NoOp, mode=Mode.Application, version=7)
+    DUMMY_APP_APPROVAL = compileTeal(Txn.on_completion() == OnComplete.NoOp, mode=Mode.Application, version=7)
     file_name = 'dummy_app_approval.teal'  # pylint: disable = C0103
     with open(file_name, 'w', encoding='utf8') as f:
-        f.write(dummy_app_approval)
+        f.write(DUMMY_APP_APPROVAL)
         print(f'compiled {file_name}')
 
-    dummy_app_clear = compileTeal(Int(1), mode=Mode.Application, version=7)
+    DUMMY_APP_CLEAR = compileTeal(Int(1), mode=Mode.Application, version=7)
     file_name = 'dummy_app_clear.teal'  # pylint: disable = C0103
     with open(file_name, 'w', encoding='utf8') as f:
-        f.write(dummy_app_clear)
+        f.write(DUMMY_APP_CLEAR)
         print(f'compiled {file_name}')

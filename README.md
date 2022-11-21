@@ -5,8 +5,8 @@
 This project demonstrates a POC of a VRF oracle on Algorand's blockchain.
 
 The project has two parts:
-* VRF smart contract in `pyteal/main.py` (PyTeal)
-* VRF service in `Go`
+* VRF smart contract in `PyTeal` (located in `pyteal/main.py`) which is used by the [Randomness beacon](https://www.algorand.foundation/news/randomness-has-arrived)
+* VRF service POC in `Go` (**NOT TO BE USED IN PRODUCTION**)
 
 It uses the same VRF implementation used by the `crypto` package in `go-algorand`.
 
@@ -14,7 +14,7 @@ The VRF service acts as a beacon and computes a pseudo random value (using VRF) 
 
 ** It also sends periodic zero amount transactions as a workaround for a weird issue where no blocks are added when there are no transactions.
 
-Design is detailed in [./DESIGN.md](DESIGN.md).
+Design is detailed in [DESIGN.md](./DESIGN.md).
 
 ## Requirements
 
@@ -61,7 +61,6 @@ Optionally set `VRF_LOG_LEVEL` to `DEBUG` or `INFO` (default is `WARN`).
 
 This service can take the following arguments:
 ```
-      --app-creator-mnemonic string   25-word mnemonic of the app creator (required)
       --approval-program string       TEAL script of the approval program (required)
       --clear-program string          TEAL script of the clear program (required)
       --dummy-app-approval            TEAL script of the dummy app approval (required)
@@ -136,14 +135,17 @@ export VRF_LOG_LEVEL=debug  # optional but recommended
 go run ./cmd run-daemon \
 --vrf-mnemonic "boil frequent harvest donkey outside start thought road insane wine tooth fame assault any advice belt walk again proud debate culture omit diary able treat" \
 --service-mnemonic "chat glory west mobile desk coin hockey swallow tilt chunk task model hidden helmet toddler tortoise always afraid absorb valve bar distance history absorb exercise" \
---app-creator-mnemonic "chat glory west mobile desk coin hockey swallow tilt chunk task model hidden helmet toddler tortoise always afraid absorb valve bar distance history absorb exercise" \
 --approval-program pyteal/vrf_beacon_abi_approval.teal \
 --clear-program pyteal/vrf_beacon_abi_clear.teal \
 --dummy-app-approval pyteal/dummy_app_approval.teal \
 --dummy-app-clear pyteal/dummy_app_clear.teal
 ```
 
-## Misc notes
+## VRF service POC
 
-We use a version of PyTeal that merge https://github.com/algorand/pyteal/pull/514
-When this PR is merged to a released version of PyTeal, `pyteal/requirements.txt` needs to be updated.
+The POC was developed around [Algorand Sandbox](https://github.com/algorand/sandbox) which, when started with `dev`
+configuration, generates a new block for every transaction group. The `mainLoop` function (`cmd/daemon/run_daemon.go`)
+goes over every block and submits a VRF proof only for block rounds that are a multiple of 8. After every proof
+submission, the service runs a few tests (with the main purpose of testing the smart contract) using the `runSomeTests`
+function (`cmd/daemon/run_daemon.go`). These tests add a number of blocks to the chain and that would eventually cause
+the service to lag and move to recovery mode.
