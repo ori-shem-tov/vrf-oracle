@@ -2,11 +2,12 @@ package tools
 
 import (
 	"fmt"
+	"strings"
+
 	"github.com/algorand/go-algorand-sdk/client/v2/algod"
 	log "github.com/sirupsen/logrus"
 	"github.com/spf13/cobra"
 	"github.com/spf13/pflag"
-	"strings"
 )
 
 func MarkFlagRequired(flag *pflag.FlagSet, name string) {

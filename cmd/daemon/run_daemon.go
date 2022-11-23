@@ -19,7 +19,7 @@ import (
 	"github.com/algorand/go-algorand-sdk/future"
 	"github.com/algorand/go-algorand-sdk/mnemonic"
 	"github.com/algorand/go-algorand-sdk/types"
-	"github.com/ori-shem-tov/vrf-oracle/libsodium-wrapper"
+	"github.com/ori-shem-tov/vrf-oracle/libsodiumwrapper"
 	"github.com/ori-shem-tov/vrf-oracle/tools"
 	log "github.com/sirupsen/logrus"
 	"github.com/spf13/cobra"
@@ -36,14 +36,14 @@ var (
 	clearProgramFilename     string
 	dummyAppApprovalFilename string
 	dummyAppClearFilename    string
-	vrfMnemonicString        string // the mnemonic for generating the vrf
-	serviceMnemonicString    string // the mnemonic for the service account (used to send responses to the smart-contract)
+	vrfMnemonicString        string // mnemonic for generating the vrf
+	serviceMnemonicString    string // mnemonic for the service account (used to send responses to the smart-contract)
 	startingRound            uint64 // the round from which the daemon starts scanning
 	AlgodAddress             = os.Getenv("AF_ALGOD_ADDRESS")
 	AlgodToken               = os.Getenv("AF_ALGOD_TOKEN")
 	logLevelEnv              = strings.ToLower(os.Getenv("VRF_LOG_LEVEL"))
-	vrfOutputsHistory        [][]byte
-	resultsHistory           map[string]Result
+	vrfOutputsHistory        map[uint64][]byte // stores the history of the VRF outputs that were generated
+	resultsHistory           map[string]Result // stores the 'get' and 'must_get' results history from tests
 )
 
 const (
@@ -168,8 +168,8 @@ func buildSubmitTransactionGroupABI(appID, dummyAppID, round uint64, serviceAcco
 }
 
 // getVrfPrivateKey converts ed25519.PrivateKey ([]byte) to libsodium_wrapper.VrfPrivkey ([64]byte)
-func getVrfPrivateKey(key ed25519.PrivateKey) libsodium_wrapper.VrfPrivkey {
-	var vrfPrivateKey libsodium_wrapper.VrfPrivkey
+func getVrfPrivateKey(key ed25519.PrivateKey) libsodiumwrapper.VrfPrivkey {
+	var vrfPrivateKey libsodiumwrapper.VrfPrivkey
 	copy(vrfPrivateKey[:], key)
 	return vrfPrivateKey
 }
@@ -180,7 +180,8 @@ func buildVrfInput(blockNumber, blockSeed []byte) [sha512.Size256]byte {
 	return sha512.Sum512_256(toHash)
 }
 
-// computeAndSignVrf computes the VRF proof and returns the VRF output and the VRF proof (to be verified by the smart contract)
+// computeAndSignVrf computes the VRF proof and returns the VRF output and the VRF proof (to be verified by the smart
+// contract)
 func computeAndSignVrf(blockNumber, blockSeed []byte, oracleVrfKey ed25519.PrivateKey) ([]byte, []byte, error) {
 	vrfInput := buildVrfInput(blockNumber, blockSeed)
 	vrfPrivateKey := getVrfPrivateKey(oracleVrfKey)
@@ -195,7 +196,8 @@ func computeAndSignVrf(blockNumber, blockSeed []byte, oracleVrfKey ed25519.Priva
 	return vrfOutput[:], proof[:], nil
 }
 
-// handleCurrentRound computes the VRF proof for a given round and submits it to the beacon's smart contract for verification
+// handleCurrentRound computes the VRF proof for a given round and submits it to the beacon's smart contract for
+// verification
 func handleCurrentRound(currentRoundHandled uint64, vrfPrivateKey ed25519.PrivateKey, serviceAccount crypto.Account,
 	appID, dummyAppID uint64, algodClient *algod.Client, suggestedParams types.SuggestedParams, blockSeed []byte,
 ) error {
@@ -224,7 +226,7 @@ func handleCurrentRound(currentRoundHandled uint64, vrfPrivateKey ed25519.Privat
 			err,
 		)
 	}
-	txId, err := algodClient.SendRawTransaction(stxBytes).Do(context.Background())
+	txID, err := algodClient.SendRawTransaction(stxBytes).Do(context.Background())
 	if err != nil {
 		return fmt.Errorf(
 			"failed sending transactions group for %d: %v",
@@ -233,8 +235,8 @@ func handleCurrentRound(currentRoundHandled uint64, vrfPrivateKey ed25519.Privat
 		)
 		//log.Debugf("stxbytes bas64: %v", base64.StdEncoding.EncodeToString(stxBytes))
 	}
-	vrfOutputsHistory = append(vrfOutputsHistory, vrfOutput)
-	log.Infof("Sent transaction %s\n########################################################", txId)
+	vrfOutputsHistory[currentRoundHandled] = vrfOutput
+	log.Infof("Sent transaction %s\n########################################################", txID)
 	return nil
 }
 
@@ -449,9 +451,9 @@ func DeployABIApp(startingRound, dummyAppID uint64, algodClient *algod.Client, v
 }
 
 // createABIAppWithVRFKey deploys the beacon's smart contract after computing the initial VRF proof to be verified
-func createABIAppWithVRFKey(startingRound, dummyAppID uint64, algodClient *algod.Client, vrfPrivateKey ed25519.PrivateKey,
-	appCreatorAccount crypto.Account, approvalBytes, clearBytes []byte, suggestedParams types.SuggestedParams) (
-	uint64, error) {
+func createABIAppWithVRFKey(startingRound, dummyAppID uint64, algodClient *algod.Client,
+	vrfPrivateKey ed25519.PrivateKey, appCreatorAccount crypto.Account, approvalBytes, clearBytes []byte,
+	suggestedParams types.SuggestedParams) (uint64, error) {
 
 	log.Infof("getting block seed for %d", startingRound)
 	block, err := getBlock(algodClient, startingRound)
@@ -469,13 +471,14 @@ func createABIAppWithVRFKey(startingRound, dummyAppID uint64, algodClient *algod
 		return 0, fmt.Errorf("failed computing vrf for %d: %v", startingRound, err)
 	}
 	log.Debugf("proof B64 is %s", base64.StdEncoding.EncodeToString(vrfProof))
-	vrfOutputsHistory = append(vrfOutputsHistory, vrfOutput)
+	vrfOutputsHistory[startingRound] = vrfOutput
 	return DeployABIApp(startingRound, dummyAppID, algodClient, vrfPrivateKey.Public().(ed25519.PublicKey),
 		appCreatorAccount, vrfProof, approvalBytes, clearBytes, suggestedParams)
 }
 
 // CompileTeal compiles an approval and clear programs given 2 corresponding TEAL script files
-func CompileTeal(approvalProgramFilename, clearProgramFilename string, algodClient *algod.Client) ([]byte, []byte, error) {
+func CompileTeal(approvalProgramFilename, clearProgramFilename string, algodClient *algod.Client) (
+	[]byte, []byte, error) {
 	// #nosec G304
 	approval, err := ioutil.ReadFile(approvalProgramFilename)
 	if err != nil {
@@ -551,24 +554,26 @@ func mainLoop(appID, dummyAppID, startingRound uint64, algodClient *algod.Client
 			return
 		}
 		if !isRecovering {
+			// we had these dummy txns in order to add new blocks since we're running in dev mode
+			// we don't do this in recovery in order to quickly finish recovery
 			if currentRoundHandled%VrfRoundMultiple != 0 {
 				sendDummyTxn(algodClient, serviceAccount, suggestedParams)
 			}
 			sleepTime := time.Duration(WaitBetweenBlocksMS) * time.Millisecond
-			//log.Debugf("sleeping %v", sleepTime)
 			time.Sleep(sleepTime)
 		}
-		nextBlockRound := latestBlockRound + 1 // assuming we're testing on sandnet
-		//log.Debugf("last round %d current round %d", latestBlockRound, currentRoundHandled)
+		// assuming testing on sandnet in dev mode (one block is created for a new transaction)
+		nextBlockRound := latestBlockRound + 1
 		// check if we are in recovery
-		// we can only get the block seed of rounds [latestBlockRound - NbRetainedBlocks, latestBlockRound], thus we enter recovery
-		// if we currently handle rounds that are < latestBlockRound - NbRetainedBlocks
+		// we can only get the block seed of rounds [latestBlockRound - NbRetainedBlocks, latestBlockRound],
+		// thus we enter recovery if we currently handle rounds that are < latestBlockRound - NbRetainedBlocks
 		if currentRoundHandled%VrfRoundMultiple == 0 && latestBlockRound > currentRoundHandled+NbRetainedBlocks {
+			// once we hit recovery mode, the next round handled is the first multiple of 8 that is inside the
+			// [nextBlockRound - NbRetainedBlocks, nextBlockRound] range
 			currentRoundHandled = floorToMultipleOfX(nextBlockRound-NbRetainedBlocks+VrfRoundMultiple, VrfRoundMultiple)
-			startingRound = currentRoundHandled
-			vrfOutputsHistory = [][]byte{}
 			isRecovering = true
-			log.Infof("\n$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$ starting recovery from round %d", currentRoundHandled)
+			log.Infof("\n$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$ starting recovery from round %d",
+				currentRoundHandled)
 		} else if latestBlockRound-currentRoundHandled <= 10 && isRecovering {
 			log.Infof("\n$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$ finished recovery")
 			isRecovering = false
@@ -583,13 +588,14 @@ func mainLoop(appID, dummyAppID, startingRound uint64, algodClient *algod.Client
 			}
 			suggestedParams.FirstRoundValid = types.Round(currentRoundHandled + 1)
 			suggestedParams.LastRoundValid = suggestedParams.FirstRoundValid + 1000
-			err = handleCurrentRound(currentRoundHandled, vrfPrivateKey, serviceAccount, appID, dummyAppID, algodClient, suggestedParams, block.Seed[:])
+			err = handleCurrentRound(currentRoundHandled, vrfPrivateKey, serviceAccount, appID, dummyAppID, algodClient,
+				suggestedParams, block.Seed[:])
 			if err != nil {
 				log.Errorf("error handling requests for current round %d: %v", currentRoundHandled, err)
 				return
 			}
 			if !isRecovering {
-				err = runSomeTests(currentRoundHandled, appID, dummyAppID, startingRound, serviceAccount, algodClient, vrfPrivateKey)
+				err = runSomeTests(currentRoundHandled, appID, dummyAppID, serviceAccount, algodClient)
 				if err != nil {
 					log.Errorf("failed tests: %v", err)
 					return
@@ -676,7 +682,8 @@ var RunDaemonCmd = &cobra.Command{
 		}
 
 		log.Info("creating dummy app...")
-		dummyApprovalBytes, dummyClearBytes, err := CompileTeal(dummyAppApprovalFilename, dummyAppClearFilename, algodClient)
+		dummyApprovalBytes, dummyClearBytes, err := CompileTeal(dummyAppApprovalFilename, dummyAppClearFilename,
+			algodClient)
 		if err != nil {
 			log.Error(err)
 			return
@@ -694,6 +701,7 @@ var RunDaemonCmd = &cobra.Command{
 			log.Error(err)
 			return
 		}
+		vrfOutputsHistory = make(map[uint64][]byte)
 		appID, err := createABIAppWithVRFKey(
 			startingRound, dummyAppID, algodClient, vrfPrivateKey,
 			serviceAccount, approvalBytes, clearBytes, suggestedParams)

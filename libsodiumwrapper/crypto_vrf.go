@@ -14,7 +14,7 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with go-algorand.  If not, see <https://www.gnu.org/licenses/>.
 
-package libsodium_wrapper
+package libsodiumwrapper
 
 // #cgo CFLAGS: -Wall -std=c99
 // #cgo darwin,amd64 CFLAGS: -I${SRCDIR}/../libs/darwin/amd64/include
@@ -60,9 +60,9 @@ func GenerateVRFSecrets() *VRFSecrets {
 	return s
 }
 
-// TODO: Go arrays are copied by value, so any call to e.g. VrfPrivkey.Prove() makes a copy of the secret key that lingers in memory.
-// To avoid this, should we instead allocate memory for secret keys here (maybe even in the C heap) and pass around pointers?
-// e.g., allocate a privkey with sodium_malloc and have VrfPrivkey be of type unsafe.Pointer?
+// TODO: Go arrays are copied by value, so any call to e.g. VrfPrivkey.Prove() makes a copy of the secret key that
+// lingers in memory. To avoid this, should we instead allocate memory for secret keys here (maybe even in the C heap)
+// and pass around pointers? e.g., allocate a privkey with sodium_malloc and have VrfPrivkey be of type unsafe.Pointer?
 type (
 	// A VrfPrivkey is a private key used for producing VRF proofs.
 	// Specifically, we use a 64-byte ed25519 private key (the latter 32-bytes are the precomputed public key)
@@ -70,7 +70,8 @@ type (
 	// A VrfPubkey is a public key that can be used to verify VRF proofs.
 	VrfPubkey [32]byte
 	// A VrfProof for a message can be generated with a secret key and verified against a public key, like a signature.
-	// Proofs are malleable, however, for a given message and public key, the VRF output that can be computed from a proof is unique.
+	// Proofs are malleable, however, for a given message and public key, the VRF output that can be computed from a
+	// proof is unique.
 	VrfProof [80]byte
 	// VrfOutput is a 64-byte pseudorandom value that can be computed from a VrfProof.
 	// The VRF scheme guarantees that such output will be unique
@@ -119,7 +120,8 @@ func (pk VrfPubkey) verifyBytes(proof VrfProof, msg []byte) (bool, VrfOutput) {
 	if len(msg) != 0 {
 		m = (*C.uchar)(&msg[0])
 	}
-	ret := C.crypto_vrf_verify((*C.uchar)(&out[0]), (*C.uchar)(&pk[0]), (*C.uchar)(&proof[0]), (*C.uchar)(m), (C.ulonglong)(len(msg)))
+	ret := C.crypto_vrf_verify(
+		(*C.uchar)(&out[0]), (*C.uchar)(&pk[0]), (*C.uchar)(&proof[0]), (*C.uchar)(m), (C.ulonglong)(len(msg)))
 	return ret == 0, out
 }
 

@@ -4,10 +4,11 @@ PyTEAL smart contracts for VRF oracle
 See ../DESIGN.md for design details
 """
 
-# pylint: disable=W0401,W0614
+# pylint: disable=W0401,W0614,E0602
 # W0401 is wildcard-import
 # W0614 is unused-wildcard-import
 # W0622 is redefined-builtin -> due to the fact we need to use "round" as argument for ABI
+# E0602 is undefined-variable -> all the types imported from pyteal using *
 
 import json
 from typing import Literal

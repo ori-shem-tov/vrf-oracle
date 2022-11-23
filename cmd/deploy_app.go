@@ -2,6 +2,9 @@ package main
 
 import (
 	"encoding/base64"
+	"os"
+	"strings"
+
 	"github.com/algorand/go-algorand-sdk/crypto"
 	"github.com/algorand/go-algorand-sdk/mnemonic"
 	"github.com/algorand/go-algorand-sdk/types"
@@ -9,8 +12,6 @@ import (
 	"github.com/ori-shem-tov/vrf-oracle/tools"
 	log "github.com/sirupsen/logrus"
 	"github.com/spf13/cobra"
-	"os"
-	"strings"
 )
 
 var (
@@ -41,19 +42,24 @@ func init() {
 	DeployAppCmd.Flags().Uint64Var(&startingRound, "starting-round", 0,
 		"the round to start scanning from (optional. default: current round)")
 
-	DeployAppCmd.Flags().StringVar(&appCreatorMnemonic, "app-creator-mnemonic", "", "25-word mnemonic of the app creator (required)")
+	DeployAppCmd.Flags().StringVar(&appCreatorMnemonic, "app-creator-mnemonic", "",
+		"25-word mnemonic of the app creator (required)")
 	tools.MarkFlagRequired(DeployAppCmd.Flags(), "app-creator-mnemonic")
 
-	DeployAppCmd.Flags().StringVar(&approvalProgramFilename, "approval-program", "", "TEAL script of the approval program (required)")
+	DeployAppCmd.Flags().StringVar(&approvalProgramFilename, "approval-program", "",
+		"TEAL script of the approval program (required)")
 	tools.MarkFlagRequired(DeployAppCmd.Flags(), "approval-program")
 
-	DeployAppCmd.Flags().StringVar(&clearProgramFilename, "clear-program", "", "TEAL script of the clear program (required)")
+	DeployAppCmd.Flags().StringVar(&clearProgramFilename, "clear-program", "",
+		"TEAL script of the clear program (required)")
 	tools.MarkFlagRequired(DeployAppCmd.Flags(), "clear-program")
 
-	DeployAppCmd.Flags().StringVar(&dummyAppApprovalFilename, "dummy-app-approval", "", "TEAL script of the dummy app approval (required)")
+	DeployAppCmd.Flags().StringVar(&dummyAppApprovalFilename, "dummy-app-approval", "",
+		"TEAL script of the dummy app approval (required)")
 	tools.MarkFlagRequired(DeployAppCmd.Flags(), "dummy-app-approval")
 
-	DeployAppCmd.Flags().StringVar(&dummyAppClearFilename, "dummy-app-clear", "", "TEAL script of the dummy app clear (required)")
+	DeployAppCmd.Flags().StringVar(&dummyAppClearFilename, "dummy-app-clear", "",
+		"TEAL script of the dummy app clear (required)")
 	tools.MarkFlagRequired(DeployAppCmd.Flags(), "dummy-app-clear")
 
 }
@@ -96,7 +102,8 @@ var DeployAppCmd = &cobra.Command{
 		}
 
 		log.Info("creating dummy app...")
-		dummyApprovalBytes, dummyClearBytes, err := daemon.CompileTeal(dummyAppApprovalFilename, dummyAppClearFilename, algodClient)
+		dummyApprovalBytes, dummyClearBytes, err := daemon.CompileTeal(dummyAppApprovalFilename, dummyAppClearFilename,
+			algodClient)
 		if err != nil {
 			log.Error(err)
 			return
@@ -125,7 +132,8 @@ var DeployAppCmd = &cobra.Command{
 			return
 		}
 		appID, err := daemon.DeployABIApp(
-			startingRound, dummyAppID, algodClient, vrfPKAddr[:], appCreatorAccount, vrfProof, approvalBytes, clearBytes, suggestedParams)
+			startingRound, dummyAppID, algodClient, vrfPKAddr[:], appCreatorAccount, vrfProof, approvalBytes,
+			clearBytes, suggestedParams)
 		if err != nil {
 			log.Error(err)
 			return

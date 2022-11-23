@@ -89,6 +89,10 @@ python3 main.py
 
 ## Test
 
+This section explains how to test the oracle on a sandbox `dev` network.
+This is not to be used in a production environment.
+If you want to use the oracle on TestNet or MainNet, use [Usage and Best Practices for Randomness Beacon](https://developer.algorand.org/articles/usage-and-best-practices-for-randomness-beacon/)
+
 ### Prerequisites
 
 - Launch instance of Algorand's `node` and set environment variables
@@ -140,6 +144,8 @@ go run ./cmd run-daemon \
 --dummy-app-approval pyteal/dummy_app_approval.teal \
 --dummy-app-clear pyteal/dummy_app_clear.teal
 ```
+
+Starting the service runs the VRF service POC as described in the section below.
 
 ## VRF service POC
 
