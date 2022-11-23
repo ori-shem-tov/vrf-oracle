@@ -1,5 +1,7 @@
 # vrf-oracle
 
+This project is now archived and moved to https://github.com/algorandfoundation/randomness-beacon
+
 ## Overview
 
 This project demonstrates a POC of a VRF oracle on Algorand's blockchain.
